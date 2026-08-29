@@ -28,50 +28,56 @@ public class Main {
 
                 System.out.println("Client connected: " + clientSocket.getRemoteSocketAddress());
 
-                InputStream inputStream = clientSocket.getInputStream();
-                OutputStream outputStream = clientSocket.getOutputStream();
-                byte[] buffer = new byte[1024];
-                int bytesRead;
-
-                // bytes that arrived but don't form a complete request yet
-                ByteArrayOutputStream pending = new ByteArrayOutputStream();
-
-                // read() returns -1 when the client closes its end
-                while ((bytesRead = inputStream.read(buffer)) != -1) {
-                    pending.write(buffer, 0, bytesRead);
-
-                    // one read can carry several requests, or none at all
-                    byte[] data = pending.toByteArray();
-                    int start = 0;
-                    for (int i = 0; i < data.length; i++) {
-                        if(data[i] != '\n'){
-                            continue;
-                        }
-
-                        String request = new String(data, start, i - start, StandardCharsets.UTF_8);
-                        System.out.println("Request: " + request.replace("\r", "\\r"));
-
-                        outputStream.write((request + "\n").getBytes(StandardCharsets.UTF_8));
-                        outputStream.flush();
-
-                        start = i + 1;
-                    }
-
-                    // whatever came after the last newline is an unfinished request
-                    pending.reset();
-                    pending.write(data, start, data.length - start);
-                }
-
-
-
-
-                System.out.println("Client disconnected");
-                clientSocket.close();
+                // hand off and go straight back to accepting
+                new Thread(() -> handleClient(clientSocket)).start();
             }
         }catch (BindException e){
             System.err.println("Port 6379 already in use. Is another Redis running?");
             System.exit(1);
         }
 
+    }
+
+    private static void handleClient(Socket clientSocket){
+
+        //try-with-resources so this works owns closing its own socket
+        try ( Socket socket = clientSocket ){
+            InputStream inputStream = socket.getInputStream();
+            OutputStream outputStream = socket.getOutputStream();
+            byte[] buffer = new byte[1024];
+            int bytesRead;
+
+            // bytes that arrive but don't form a complete request yet
+            ByteArrayOutputStream pending = new ByteArrayOutputStream();
+
+            while ((bytesRead = inputStream.read(buffer)) != -1) {
+                pending.write(buffer, 0, bytesRead);
+
+                byte[] data = pending.toByteArray();
+                int start = 0;
+                for (int i = 0; i < data.length; i++) {
+                    if(data[i] != '\n'){
+                        continue;
+                    }
+                    String request = new String(data, start, i - start, StandardCharsets.UTF_8);
+                    System.out.println("Request: " + request.replace("\r", "\\r"));
+
+                    outputStream.write((request + "\n").getBytes(StandardCharsets.UTF_8));
+                    outputStream.flush();
+
+                    start = i + 1;
+                }
+
+                pending.reset();
+                pending.write(data, start, data.length - start);
+
+            }
+
+        }catch (IOException e){
+
+            //one client failing must not take the server down
+            System.err.println("Client error: " + e.getMessage());
+        }
+        System.out.println("Client disconnected");
     }
 }

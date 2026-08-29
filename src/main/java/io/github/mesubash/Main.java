@@ -1,6 +1,7 @@
 package io.github.mesubash;
 
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -32,15 +33,33 @@ public class Main {
                 byte[] buffer = new byte[1024];
                 int bytesRead;
 
+                // bytes that arrived but don't form a complete request yet
+                ByteArrayOutputStream pending = new ByteArrayOutputStream();
+
                 // read() returns -1 when the client closes its end
                 while ((bytesRead = inputStream.read(buffer)) != -1) {
-                    String data = new String(buffer, 0, bytesRead, StandardCharsets.UTF_8);
-                    // escape the invisible bytes, they matter once RESP arrives
-                    System.out.println("Received: " + bytesRead + " bytes: " + data.replace("\r", "\\r").replace("\n", "\\n"));
+                    pending.write(buffer, 0, bytesRead);
 
-                    // echo back exactly what arrived, same bounds discipline as the read
-                    outputStream.write(buffer, 0, bytesRead);
-                    outputStream.flush();
+                    // one read can carry several requests, or none at all
+                    byte[] data = pending.toByteArray();
+                    int start = 0;
+                    for (int i = 0; i < data.length; i++) {
+                        if(data[i] != '\n'){
+                            continue;
+                        }
+
+                        String request = new String(data, start, i - start, StandardCharsets.UTF_8);
+                        System.out.println("Request: " + request.replace("\r", "\\r"));
+
+                        outputStream.write((request + "\n").getBytes(StandardCharsets.UTF_8));
+                        outputStream.flush();
+
+                        start = i + 1;
+                    }
+
+                    // whatever came after the last newline is an unfinished request
+                    pending.reset();
+                    pending.write(data, start, data.length - start);
                 }
 
 

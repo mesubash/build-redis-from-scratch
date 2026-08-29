@@ -58,8 +58,7 @@ public class Main {
                 while ((command = parser.next()) != null) {
                     System.out.println("Command: " + Arrays.toString(command));
 
-                    outputStream.write((Arrays.toString(command) + "\r\n")
-                            .getBytes(StandardCharsets.UTF_8));
+                    outputStream.write(RespWriter.simpleString("PONG"));
                     outputStream.flush();
                 }
             }

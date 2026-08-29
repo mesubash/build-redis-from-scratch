@@ -1,7 +1,6 @@
 package io.github.mesubash;
 
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -10,6 +9,7 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 
 public class Main {
     static void main(String[] args) throws IOException {
@@ -40,37 +40,28 @@ public class Main {
 
     private static void handleClient(Socket clientSocket){
 
-        //try-with-resources so this works owns closing its own socket
+        //try-with-resources so this worker owns closing its own socket
         try ( Socket socket = clientSocket ){
             InputStream inputStream = socket.getInputStream();
             OutputStream outputStream = socket.getOutputStream();
             byte[] buffer = new byte[1024];
             int bytesRead;
 
-            // bytes that arrive but don't form a complete request yet
-            ByteArrayOutputStream pending = new ByteArrayOutputStream();
+            // the parser owns the pending bytes now
+            RespParser parser = new RespParser();
 
             while ((bytesRead = inputStream.read(buffer)) != -1) {
-                pending.write(buffer, 0, bytesRead);
+                parser.append(buffer, bytesRead);
 
-                byte[] data = pending.toByteArray();
-                int start = 0;
-                for (int i = 0; i < data.length; i++) {
-                    if(data[i] != '\n'){
-                        continue;
-                    }
-                    String request = new String(data, start, i - start, StandardCharsets.UTF_8);
-                    System.out.println("Request: " + request.replace("\r", "\\r"));
+                // one read may hold several commands, or none
+                String[] command;
+                while ((command = parser.next()) != null) {
+                    System.out.println("Command: " + Arrays.toString(command));
 
-                    outputStream.write((request + "\n").getBytes(StandardCharsets.UTF_8));
+                    outputStream.write((Arrays.toString(command) + "\r\n")
+                            .getBytes(StandardCharsets.UTF_8));
                     outputStream.flush();
-
-                    start = i + 1;
                 }
-
-                pending.reset();
-                pending.write(data, start, data.length - start);
-
             }
 
         }catch (IOException e){

@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.net.BindException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
+import java.net.Socket;
 
 public class Main {
     static void main(String[] args) throws IOException {
@@ -17,13 +18,14 @@ public class Main {
 
             System.out.println("Listening on port " + serverSocket.getLocalPort());
 
-            // nothing accepts connections yet, so park main here
-            // otherwise the JVM exits and takes the socket down with it
+            while (true) {
+                // blocks until the kernam has a complete connection waiting for us
+                Socket clientSocket = serverSocket.accept();
 
-            try {
-                Thread.currentThread().join();
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+                System.out.println("Client conntected: " + clientSocket.getRemoteSocketAddress());
+
+                // nothing to sey to it yet so hand up
+                clientSocket.close();
             }
         }catch (BindException e){
             System.err.println("Port 6379 already in use. Is another Redis running?");

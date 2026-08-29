@@ -3,6 +3,7 @@ package io.github.mesubash;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.net.BindException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
@@ -27,6 +28,7 @@ public class Main {
                 System.out.println("Client connected: " + clientSocket.getRemoteSocketAddress());
 
                 InputStream inputStream = clientSocket.getInputStream();
+                OutputStream outputStream = clientSocket.getOutputStream();
                 byte[] buffer = new byte[1024];
                 int bytesRead;
 
@@ -35,7 +37,14 @@ public class Main {
                     String data = new String(buffer, 0, bytesRead, StandardCharsets.UTF_8);
                     // escape the invisible bytes, they matter once RESP arrives
                     System.out.println("Received: " + bytesRead + " bytes: " + data.replace("\r", "\\r").replace("\n", "\\n"));
+
+                    // echo back exactly what arrived, same bounds discipline as the read
+                    outputStream.write(buffer, 0, bytesRead);
+                    outputStream.flush();
                 }
+
+
+
 
                 System.out.println("Client disconnected");
                 clientSocket.close();

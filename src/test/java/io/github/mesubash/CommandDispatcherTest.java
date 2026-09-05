@@ -132,8 +132,6 @@ public class CommandDispatcherTest {
     void setWrongArityIsAnError() {
         assertEquals("-ERR wrong number of arguments for 'set' command\r\n",
                 reply("SET", "k"));
-        assertEquals("-ERR wrong number of arguments for 'set' command\r\n",
-                reply("SET", "k", "v", "EX", "10"));
     }
 
     @Test
@@ -164,5 +162,45 @@ public class CommandDispatcherTest {
         writer.execute(new String[]{"SET", "shared", "hello"});
         assertEquals("$5\r\nhello\r\n",
                 new String(reader.execute(new String[]{"GET", "shared"}), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    void setWithPxReturnsOk() {
+        assertEquals("+OK\r\n", reply("SET", "k", "v", "PX", "100"));
+    }
+
+    @Test
+    void setWithExReturnsOk() {
+        assertEquals("+OK\r\n", reply("SET", "k", "v", "EX", "10"));
+    }
+
+    @Test
+    void expiryOptionIsCaseInsensitive() {
+        assertEquals("+OK\r\n", reply("SET", "k", "v", "px", "100"));
+    }
+
+    @Test
+    void nonNumericTtlIsAnError() {
+        assertEquals("-ERR value is not an integer or out of range\r\n",
+                reply("SET", "k", "v", "PX", "abc"));
+    }
+
+    @Test
+    void zeroOrNegativeTtlIsAnError() {
+        assertEquals("-ERR invalid expire time in 'set' command\r\n",
+                reply("SET", "k", "v", "PX", "0"));
+        assertEquals("-ERR invalid expire time in 'set' command\r\n",
+                reply("SET", "k", "v", "EX", "-1"));
+    }
+
+    @Test
+    void unknownSetOptionIsASyntaxError() {
+        assertEquals("-ERR syntax error\r\n", reply("SET", "k", "v", "FOO", "10"));
+    }
+
+    @Test
+    void valueSetWithTtlIsReadableImmediately() {
+        reply("SET", "k", "v", "PX", "10000");
+        assertEquals("$1\r\nv\r\n", reply("GET", "k"));
     }
 }

@@ -49,10 +49,32 @@ public class CommandDispatcher {
     }
 
     private byte[] set(String[] command) {
-        if (command.length != 3) {
+        if (command.length != 3 && command.length != 5) {
             return RespWriter.error("ERR wrong number of arguments for 'set' command");
         }
-        store.set(command[1], command[2]);
+        if(command.length == 3) {
+            store.set(command[1], command[2]);
+            return RespWriter.simpleString("OK");
+        }
+        long multiplier = switch (command[3].toUpperCase(Locale.ROOT)){
+            case "PX" -> 1L;
+            case "EX" -> 1000L;
+            default -> 0L;
+        };
+        if(multiplier == 0L) {
+            return RespWriter.error("ERR syntax error");
+        }
+
+        long amount;
+        try {
+            amount = Long.parseLong(command[4]);
+        }catch (NumberFormatException e){
+            return RespWriter.error("ERR value is not an integer or out of range");
+        }
+        if( amount <= 0 ){
+            return RespWriter.error("ERR invalid expire time in 'set' command");
+        }
+        store.set(command[1], command[2], amount * multiplier);
         return RespWriter.simpleString("OK");
     }
 

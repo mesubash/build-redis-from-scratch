@@ -8,6 +8,8 @@ import java.net.BindException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.file.Path;
+import java.util.List;
 
 public class Main {
     static void main(String[] args) throws IOException {
@@ -23,7 +25,10 @@ public class Main {
             System.out.println("Listening on port " + serverSocket.getLocalPort());
 
             // one store for the whole server, shared by every client thread
-            CommandDispatcher dispatcher = new CommandDispatcher(new RedisStore(), config);
+            RedisStore store = new RedisStore();
+            loadSnapshot(store, config);
+
+            CommandDispatcher dispatcher = new CommandDispatcher(store, config);
 
             while (true) {
                 // blocks until the kernel has a complete connection waiting for us
@@ -39,6 +44,24 @@ public class Main {
             System.exit(1);
         }
 
+    }
+
+    private static void loadSnapshot(RedisStore store, ServerConfig config) {
+        Path file = Path.of(config.get("dir"), config.get("dbfilename"));
+        try {
+            List<RdbReader.Record> records = RdbReader.read(file);
+            for (RdbReader.Record record : records) {
+                store.restore(record.key(), record.value(), record.expiresAtEpochMillis());
+            }
+            if (!records.isEmpty()) {
+                // keys that had already expired are read but not restored
+                System.out.println("Loaded " + store.keys("*").size() + " of "
+                        + records.size() + " keys from " + file);
+            }
+        } catch (IOException e) {
+            // a corrupt snapshot shouldn't stop the server, it just starts empty
+            System.err.println("Could not read " + file + ": " + e.getMessage());
+        }
     }
 
     private static void handleClient(Socket clientSocket, CommandDispatcher dispatcher){

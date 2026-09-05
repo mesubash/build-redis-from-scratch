@@ -279,6 +279,22 @@ public class RedisStore {
         data.clear();
     }
 
+    // used when loading an rdb file: the deadline arrives as an absolute wall-clock instant,
+    // which has to be turned into one on our monotonic clock
+    public void restore(String key, String value, long expiresAtEpochMillis) {
+        if (expiresAtEpochMillis == 0) {
+            set(key, value);
+            return;
+        }
+
+        long remaining = expiresAtEpochMillis - System.currentTimeMillis();
+        if (remaining <= 0) {
+            // already expired when the file was loaded, so it never enters the keyspace
+            return;
+        }
+        set(key, value, remaining);
+    }
+
     // a page of keys plus the cursor to continue from, 0 meaning the scan is finished
     public record ScanPage(long nextCursor, List<String> keys) {
     }

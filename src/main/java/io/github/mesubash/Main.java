@@ -8,7 +8,6 @@ import java.net.BindException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 public class Main {
@@ -56,9 +55,7 @@ public class Main {
                 // one read may hold several commands, or none
                 String[] command;
                 while ((command = parser.next()) != null) {
-                    System.out.println("Command: " + Arrays.toString(command));
-
-                    outputStream.write(RespWriter.simpleString("PONG"));
+                    outputStream.write(CommandDispatcher.execute(command));
                     outputStream.flush();
                 }
             }
@@ -67,6 +64,9 @@ public class Main {
 
             //one client failing must not take the server down
             System.err.println("Client error: " + e.getMessage());
+        }catch (IllegalStateException e){
+            // the byte stream is broken, nothing after this can be trusted
+            System.err.println("Protocol error, closing connection: " + e.getMessage());
         }
         System.out.println("Client disconnected");
     }

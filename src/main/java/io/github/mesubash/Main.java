@@ -8,7 +8,6 @@ import java.net.BindException;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.util.Arrays;
 
 public class Main {
     static void main(String[] args) throws IOException {
@@ -21,6 +20,9 @@ public class Main {
 
             System.out.println("Listening on port " + serverSocket.getLocalPort());
 
+            // one store for the whole server, shared by every client thread
+            CommandDispatcher dispatcher = new CommandDispatcher(new RedisStore());
+
             while (true) {
                 // blocks until the kernel has a complete connection waiting for us
                 Socket clientSocket = serverSocket.accept();
@@ -28,7 +30,7 @@ public class Main {
                 System.out.println("Client connected: " + clientSocket.getRemoteSocketAddress());
 
                 // hand off and go straight back to accepting
-                new Thread(() -> handleClient(clientSocket)).start();
+                new Thread(() -> handleClient(clientSocket, dispatcher)).start();
             }
         }catch (BindException e){
             System.err.println("Port 6379 already in use. Is another Redis running?");
@@ -37,7 +39,7 @@ public class Main {
 
     }
 
-    private static void handleClient(Socket clientSocket){
+    private static void handleClient(Socket clientSocket, CommandDispatcher dispatcher){
 
         //try-with-resources so this worker owns closing its own socket
         try ( Socket socket = clientSocket ){
@@ -55,7 +57,7 @@ public class Main {
                 // one read may hold several commands, or none
                 String[] command;
                 while ((command = parser.next()) != null) {
-                    outputStream.write(CommandDispatcher.execute(command));
+                    outputStream.write(dispatcher.execute(command));
                     outputStream.flush();
                 }
             }

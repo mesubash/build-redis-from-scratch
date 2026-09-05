@@ -6,7 +6,13 @@ import java.util.Locale;
 // turns a parsed command into RESP reply. Knows nothing about sockets.
 public class CommandDispatcher {
 
-    public static byte[] execute(String[] command) {
+    private final RedisStore store;
+
+    public CommandDispatcher(RedisStore store) {
+        this.store = store;
+    }
+
+    public byte[] execute(String[] command) {
         if (command.length == 0) {
             return RespWriter.error("ERR empty command");
         }
@@ -17,11 +23,13 @@ public class CommandDispatcher {
         return switch (name) {
             case "PING" -> ping(command);
             case "ECHO" -> echo(command);
+            case "SET" -> set(command);
+            case "GET" -> get(command);
             default ->  RespWriter.error("ERR unknown command '" + command[0] + "'");
         };
     }
 
-    private static byte[] ping(String[] command) {
+    private byte[] ping(String[] command) {
         if (command.length == 1) {
             return RespWriter.simpleString("PONG");
         }
@@ -32,12 +40,28 @@ public class CommandDispatcher {
         return RespWriter.error("ERR wrong number of arguments for 'ping' command");
     }
 
-    private static byte[] echo(String[] command) {
+    private byte[] echo(String[] command) {
         if (command.length != 2) {
             return RespWriter.error("ERR wrong number of arguments for 'echo' command");
         }
 
         return RespWriter.bulkString(command[1]);
+    }
+
+    private byte[] set(String[] command) {
+        if (command.length != 3) {
+            return RespWriter.error("ERR wrong number of arguments for 'set' command");
+        }
+        store.set(command[1], command[2]);
+        return RespWriter.simpleString("OK");
+    }
+
+    private byte[] get(String[] command) {
+        if (command.length != 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'get' command");
+        }
+        //bulkString turns a null into $-1 for us
+        return RespWriter.bulkString(store.get(command[1]));
     }
 
 }

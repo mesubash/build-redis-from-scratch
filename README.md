@@ -8,6 +8,9 @@ It speaks the real protocol, so `redis-cli` talks to it without knowing the diff
 ```bash
 mvn clean package
 java -cp target/classes io.github.mesubash.Main --port 6379
+
+# or as a replica of another instance
+java -cp target/classes io.github.mesubash.Main --port 6380 --replicaof "localhost 6379"
 ```
 
 ```bash
@@ -42,11 +45,16 @@ $ redis-cli ttl name
 
 **Server** `CONFIG GET` · `INFO` · `DBSIZE` · `FLUSHALL` · `SAVE` · `BGSAVE` · `PING` · `ECHO` · `COMMAND`
 
+**Replication** `REPLCONF` · `PSYNC` · `WAIT`, and `--replicaof "host port"`
+
 Keys expire lazily, values are binary-safe, and every command runs concurrently across
 thread-per-connection workers.
 
 String keys persist to an RDB snapshot on `SAVE`, and load on startup. The format is real
 enough that `redis-server` reads our files and we read its.
+
+A second instance started with `--replicaof "host port"` handshakes with the master, receives
+a snapshot, then follows every write on the same connection.
 
 ## How it fits together
 
@@ -76,6 +84,7 @@ RespParser ──────► String[]  ──────► CommandDispatch
 | `RedisSortedSet` | score index plus ordering, for sorted sets |
 | `ServerConfig` | command line options, `CONFIG GET` |
 | `RdbReader` / `RdbWriter` | the RDB snapshot format, strings only |
+| `Replication` / `ReplicaClient` | master-side replica registry, replica-side follower |
 
 Two boundaries carry the design: nothing outside `RespParser`/`RespWriter` touches `\r\n`, and
 nothing outside `RedisStore` decides whether a key has expired.
@@ -86,14 +95,18 @@ nothing outside `RedisStore` decides whether a key has expired.
 mvn test
 ```
 
-281 tests. The ones worth reading are the concurrency cases in `RedisStoreTest` — concurrent
+295 tests. The ones worth reading are the concurrency cases in `RedisStoreTest` — concurrent
 `INCR` and `RPUSH` that fail against a read-then-write implementation and pass against
 `compute()` — and `WatchTest.everyMutatingCommandInvalidatesAWatch`, which catches a new write
 command forgetting to bump the version counter.
 
 ## Not implemented
 
-Replication, consumer groups, `CONFIG SET`, set algebra (`SINTER`/`SUNION`/`SDIFF`), and AOF.
+Consumer groups, `CONFIG SET`, set algebra (`SINTER`/`SUNION`/`SDIFF`), and AOF.
+
+Replication does a full resync every time — there is no partial resync backlog, no chained
+replicas, and `WAIT` returns the connected replica count rather than blocking for
+acknowledgements.
 
 RDB handles strings only — lists, hashes, sets, sorted sets and streams are skipped when
 saving, because writing them needs redis's listpack and quicklist encodings. Snapshots also

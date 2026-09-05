@@ -16,17 +16,24 @@ public class CommandDispatcher {
             "RPUSH", "LPUSH", "LRANGE", "LLEN", "LPOP", "BLPOP",
             "MULTI", "EXEC", "DISCARD",
             "SUBSCRIBE", "UNSUBSCRIBE", "PUBLISH",
-            "XADD", "XRANGE", "XLEN", "XREAD");
+            "XADD", "XRANGE", "XLEN", "XREAD",
+            "CONFIG", "INFO", "DBSIZE", "FLUSHALL", "COMMAND");
 
     // once subscribed a connection may only do these
     private static final Set<String> SUBSCRIBED_MODE_COMMANDS =
             Set.of("SUBSCRIBE", "UNSUBSCRIBE", "PING", "QUIT", "RESET");
 
     private final RedisStore store;
+    private final ServerConfig config;
     private final PubSub pubSub = new PubSub();
 
     public CommandDispatcher(RedisStore store) {
+        this(store, new ServerConfig());
+    }
+
+    public CommandDispatcher(RedisStore store, ServerConfig config) {
         this.store = store;
+        this.config = config;
     }
 
     // the connection loop tells us when a client is gone
@@ -86,6 +93,12 @@ public class CommandDispatcher {
                 case "XRANGE" -> xrange(command);
                 case "XLEN" -> xlen(command);
                 case "XREAD" -> xread(command);
+                case "CONFIG" -> config(command);
+                case "INFO" -> info(command);
+                case "DBSIZE" -> RespWriter.integer(store.keys("*").size());
+                case "FLUSHALL" -> flushall(command);
+                // redis-cli sends this on connect, an empty array keeps it happy
+                case "COMMAND" -> RespWriter.array();
                 default ->  RespWriter.error("ERR unknown command '" + command[0] + "'");
             };
         }catch (WrongTypeException e){
@@ -235,6 +248,53 @@ public class CommandDispatcher {
             return RespWriter.error("ERR wrong number of arguments for 'llen' command");
         }
         return RespWriter.integer(store.llen(command[1]));
+    }
+
+    private byte[] config(String[] command) {
+        if (command.length < 3 || !command[1].equalsIgnoreCase("GET")) {
+            return RespWriter.error("ERR Unknown CONFIG subcommand or wrong number of arguments");
+        }
+
+        // the reply is a flat name/value array, and unknown names are simply left out
+        List<byte[]> pairs = new ArrayList<>();
+        for (int i = 2; i < command.length; i++) {
+            String value = config.get(command[i]);
+            if (value != null) {
+                pairs.add(RespWriter.bulkString(command[i].toLowerCase(Locale.ROOT)));
+                pairs.add(RespWriter.bulkString(value));
+            }
+        }
+        return RespWriter.array(pairs.toArray(new byte[0][]));
+    }
+
+    private byte[] info(String[] command) {
+        if (command.length > 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'info' command");
+        }
+
+        // one bulk string of key:value lines, sections separated by # headers
+        String body = """
+                # Server
+                redis_version:7.0.0
+                tcp_port:%d
+
+                # Replication
+                role:master
+                connected_slaves:0
+
+                # Keyspace
+                db0:keys=%d
+                """.formatted(config.port(), store.keys("*").size());
+
+        return RespWriter.bulkString(body);
+    }
+
+    private byte[] flushall(String[] command) {
+        if (command.length != 1) {
+            return RespWriter.error("ERR wrong number of arguments for 'flushall' command");
+        }
+        store.clear();
+        return RespWriter.simpleString("OK");
     }
 
     private byte[] xadd(String[] command) {

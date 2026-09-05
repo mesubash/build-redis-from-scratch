@@ -106,6 +106,10 @@ public class RedisStore {
         return entry.value() instanceof List ? "list" : "string";
     }
 
+    public void clear() {
+        data.clear();
+    }
+
     // snapshot, weakly consistent - deliberately not locking the whole map
     public List<String> keys(String pattern) {
         Pattern regex = globToRegex(pattern);

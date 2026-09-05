@@ -12,16 +12,18 @@ import java.net.Socket;
 public class Main {
     static void main(String[] args) throws IOException {
 
+        ServerConfig config = new ServerConfig(args);
+
         try( ServerSocket serverSocket = new ServerSocket()) {
 
             // lets us rebind immediately after a restart instead of waiting out TIME_WAIT
             serverSocket.setReuseAddress(true);
-            serverSocket.bind(new InetSocketAddress(6379));
+            serverSocket.bind(new InetSocketAddress(config.port()));
 
             System.out.println("Listening on port " + serverSocket.getLocalPort());
 
             // one store for the whole server, shared by every client thread
-            CommandDispatcher dispatcher = new CommandDispatcher(new RedisStore());
+            CommandDispatcher dispatcher = new CommandDispatcher(new RedisStore(), config);
 
             while (true) {
                 // blocks until the kernel has a complete connection waiting for us
@@ -33,7 +35,7 @@ public class Main {
                 new Thread(() -> handleClient(clientSocket, dispatcher)).start();
             }
         }catch (BindException e){
-            System.err.println("Port 6379 already in use. Is another Redis running?");
+            System.err.println("Port " + config.port() + " already in use. Is another Redis running?");
             System.exit(1);
         }
 

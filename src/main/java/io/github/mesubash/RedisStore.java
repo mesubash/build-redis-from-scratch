@@ -279,6 +279,34 @@ public class RedisStore {
         data.clear();
     }
 
+    // a page of keys plus the cursor to continue from, 0 meaning the scan is finished
+    public record ScanPage(long nextCursor, List<String> keys) {
+    }
+
+    // ponytail: cursor is an index into the sorted keyspace, so it costs a sort per call.
+    // real redis walks hash buckets in reverse-binary order, which survives resizing without
+    // sorting - worth doing if the keyspace ever gets big enough to notice
+    public ScanPage scan(long cursor, String pattern, int count) {
+        List<String> allKeys = new ArrayList<>(data.keySet());
+        allKeys.sort(null);
+
+        Pattern regex = globToRegex(pattern);
+        List<String> page = new ArrayList<>();
+
+        int at = (int) Math.min(Math.max(cursor, 0), allKeys.size());
+        while (at < allKeys.size() && page.size() < count) {
+            String key = allKeys.get(at);
+            at++;
+
+            // expired keys are skipped but still consume a step, so a page can come back short
+            if (regex.matcher(key).matches() && exists(key)) {
+                page.add(key);
+            }
+        }
+
+        return new ScanPage(at >= allKeys.size() ? 0 : at, page);
+    }
+
     // snapshot, weakly consistent - deliberately not locking the whole map
     public List<String> keys(String pattern) {
         Pattern regex = globToRegex(pattern);

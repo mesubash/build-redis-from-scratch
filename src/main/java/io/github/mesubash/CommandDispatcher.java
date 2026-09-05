@@ -21,7 +21,7 @@ public class CommandDispatcher {
             "HSET", "HGET", "HGETALL", "HDEL", "HEXISTS", "HLEN", "HKEYS", "HVALS",
             "SADD", "SREM", "SMEMBERS", "SISMEMBER", "SCARD",
             "ZADD", "ZREM", "ZSCORE", "ZRANK", "ZCARD", "ZRANGE",
-            "CONFIG", "INFO", "DBSIZE", "FLUSHALL", "COMMAND",
+            "CONFIG", "INFO", "DBSIZE", "FLUSHALL", "COMMAND", "SCAN",
             "TTL", "PTTL", "EXPIRE", "PEXPIRE", "PERSIST",
             "MGET", "MSET", "SETNX", "APPEND", "STRLEN", "GETDEL");
 
@@ -130,6 +130,7 @@ public class CommandDispatcher {
                 case "FLUSHALL" -> flushall(command);
                 // redis-cli sends this on connect, an empty array keeps it happy
                 case "COMMAND" -> RespWriter.array();
+                case "SCAN" -> scan(command);
                 case "TTL" -> ttl(command, 1000);
                 case "PTTL" -> ttl(command, 1);
                 case "EXPIRE" -> expire(command, 1000, "expire");
@@ -387,6 +388,51 @@ public class CommandDispatcher {
             return RespWriter.error("ERR wrong number of arguments for 'getdel' command");
         }
         return RespWriter.bulkString(store.getDelete(command[1]));
+    }
+
+    // SCAN cursor [MATCH pattern] [COUNT n]
+    private byte[] scan(String[] command) {
+        if (command.length < 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'scan' command");
+        }
+
+        long cursor;
+        try {
+            cursor = Long.parseLong(command[1]);
+        } catch (NumberFormatException e) {
+            return RespWriter.error("ERR invalid cursor");
+        }
+
+        String pattern = "*";
+        int count = 10;
+        for (int i = 2; i < command.length; i += 2) {
+            if (i + 1 >= command.length) {
+                return RespWriter.error("ERR syntax error");
+            }
+            switch (command[i].toUpperCase(Locale.ROOT)) {
+                case "MATCH" -> pattern = command[i + 1];
+                case "COUNT" -> {
+                    try {
+                        count = Integer.parseInt(command[i + 1]);
+                    } catch (NumberFormatException e) {
+                        return RespWriter.error("ERR value is not an integer or out of range");
+                    }
+                    if (count < 1) {
+                        return RespWriter.error("ERR syntax error");
+                    }
+                }
+                default -> {
+                    return RespWriter.error("ERR syntax error");
+                }
+            }
+        }
+
+        RedisStore.ScanPage page = store.scan(cursor, pattern, count);
+
+        // the cursor is a bulk string, not an integer - it may not fit in one on a real server
+        return RespWriter.array(
+                RespWriter.bulkString(Long.toString(page.nextCursor())),
+                encodeStrings(page.keys()));
     }
 
     private byte[] config(String[] command) {

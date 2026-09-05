@@ -445,8 +445,20 @@ public class CommandDispatcher {
         return RespWriter.integer(store.xlen(command[1]));
     }
 
-    // XREAD STREAMS key [key...] id [id...] - the halves after STREAMS must match up
+    // XREAD [BLOCK ms] STREAMS key [key...] id [id...] - the halves after STREAMS must match up
     private byte[] xread(String[] command) {
+        long blockMillis = -1;
+        if (command.length > 2 && command[1].equalsIgnoreCase("BLOCK")) {
+            try {
+                blockMillis = Long.parseLong(command[2]);
+            } catch (NumberFormatException e) {
+                return RespWriter.error("ERR timeout is not an integer or out of range");
+            }
+            if (blockMillis < 0) {
+                return RespWriter.error("ERR timeout is negative");
+            }
+        }
+
         int streamsAt = -1;
         for (int i = 1; i < command.length; i++) {
             if (command[i].equalsIgnoreCase("STREAMS")) {
@@ -465,27 +477,56 @@ public class CommandDispatcher {
         }
 
         int pairs = remaining / 2;
-        List<byte[]> results = new ArrayList<>();
+        String[] keys = new String[pairs];
+        String[] ids = new String[pairs];
         try {
             for (int i = 0; i < pairs; i++) {
-                String key = command[streamsAt + 1 + i];
+                keys[i] = command[streamsAt + 1 + i];
                 String id = command[streamsAt + 1 + pairs + i];
 
-                List<StreamEntry> entries = store.xread(key, id);
-                if (entries.isEmpty()) {
-                    // streams with nothing new are left out entirely
-                    continue;
-                }
-                results.add(RespWriter.array(RespWriter.bulkString(key), encodeEntries(entries)));
+                // $ has to be pinned now - re-resolving it each retry would never match anything
+                ids[i] = id.equals("$") ? store.lastStreamId(keys[i]).toString() : id;
             }
         } catch (NumberFormatException e) {
             return RespWriter.error("ERR Invalid stream ID specified as stream command argument");
         }
 
-        if (results.isEmpty()) {
-            return RespWriter.nullArray();
+        long deadline = blockMillis == 0 ? Long.MAX_VALUE : System.currentTimeMillis() + blockMillis;
+
+        while (true) {
+            List<byte[]> results = new ArrayList<>();
+            try {
+                for (int i = 0; i < pairs; i++) {
+                    List<StreamEntry> entries = store.xread(keys[i], ids[i]);
+                    if (entries.isEmpty()) {
+                        // streams with nothing new are left out entirely
+                        continue;
+                    }
+                    results.add(RespWriter.array(
+                            RespWriter.bulkString(keys[i]), encodeEntries(entries)));
+                }
+            } catch (NumberFormatException e) {
+                return RespWriter.error("ERR Invalid stream ID specified as stream command argument");
+            }
+
+            if (!results.isEmpty()) {
+                return RespWriter.array(results.toArray(new byte[0][]));
+            }
+            if (blockMillis < 0) {
+                return RespWriter.nullArray();
+            }
+
+            long timeLeft = deadline - System.currentTimeMillis();
+            if (timeLeft <= 0) {
+                return RespWriter.nullArray();
+            }
+            try {
+                store.awaitWrite(timeLeft);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return RespWriter.nullArray();
+            }
         }
-        return RespWriter.array(results.toArray(new byte[0][]));
     }
 
     // each entry is [id, [field, value, ...]]

@@ -50,7 +50,7 @@ public class RedisStore {
 
     // ponytail: one monitor for every list, so a push wakes all waiters and most go back to
     // sleep. per-key monitors if a real workload ever makes the herd measurable
-    private final Object listMonitor = new Object();
+    private final Object dataMonitor = new Object();
 
     // bumped on every write, so WATCH can tell whether a key changed under it
     private final Map<String, Long> versions = new ConcurrentHashMap<>();
@@ -61,6 +61,20 @@ public class RedisStore {
 
     private void touch(String key) {
         versions.merge(key, 1L, Long::sum);
+    }
+
+    private void wakeWaiters() {
+        synchronized (dataMonitor) {
+            dataMonitor.notifyAll();
+        }
+    }
+
+    // blocks until something is written or the timeout passes. the caller re-checks either way
+    public void awaitWrite(long timeoutMillis) throws InterruptedException {
+        synchronized (dataMonitor) {
+            // capped so a caller with a long timeout still rechecks periodically
+            dataMonitor.wait(Math.min(Math.max(timeoutMillis, 1), 100));
+        }
     }
 
     public RedisStore() {
@@ -307,9 +321,7 @@ public class RedisStore {
         touch(key);
 
         // a blocked BLPOP is waiting for exactly this
-        synchronized (listMonitor) {
-            listMonitor.notifyAll();
-        }
+        wakeWaiters();
 
         return length[0];
     }
@@ -319,7 +331,7 @@ public class RedisStore {
     public String[] blockingPop(String[] keys, long timeoutMillis) throws InterruptedException {
         long deadline = timeoutMillis == 0 ? Long.MAX_VALUE : System.currentTimeMillis() + timeoutMillis;
 
-        synchronized (listMonitor) {
+        synchronized (dataMonitor) {
             while (true) {
                 // keys are checked in order, so an earlier key wins when both have data
                 for (String key : keys) {
@@ -336,7 +348,7 @@ public class RedisStore {
 
                 // wait() releases the monitor, so a pushing thread can get in and notify us.
                 // the surrounding loop re-checks because notifyAll wakes every waiter
-                listMonitor.wait(Math.min(remaining, 100));
+                dataMonitor.wait(Math.min(remaining, 100));
             }
         }
     }
@@ -456,6 +468,9 @@ public class RedisStore {
         });
 
         touch(key);
+
+        // a blocked XREAD is waiting for exactly this
+        wakeWaiters();
         return assigned[0];
     }
 

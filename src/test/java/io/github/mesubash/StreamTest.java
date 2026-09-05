@@ -5,6 +5,7 @@ import org.junit.jupiter.api.Test;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class StreamTest {
@@ -159,5 +160,67 @@ class StreamTest {
         assertEquals("-ERR wrong number of arguments for 'xadd' command\r\n", reply("XADD", "s", "1-1"));
         assertEquals("-ERR wrong number of arguments for 'xadd' command\r\n",
                 reply("XADD", "s", "1-1", "field"));
+    }
+
+    @Test
+    void blockingXreadReturnsImmediatelyWhenDataIsThere() {
+        reply("XADD", "s", "1-1", "a", "1");
+        assertTrue(reply("XREAD", "BLOCK", "1000", "STREAMS", "s", "0").startsWith("*1\r\n"));
+    }
+
+    @Test
+    void blockingXreadTimesOut() {
+        long before = System.currentTimeMillis();
+        assertEquals("*-1\r\n", reply("XREAD", "BLOCK", "150", "STREAMS", "s", "0"));
+        assertTrue(System.currentTimeMillis() - before >= 140);
+    }
+
+    @Test
+    void blockingXreadWakesOnAnXaddFromAnotherThread() throws InterruptedException {
+        Thread writer = new Thread(() -> {
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            reply("XADD", "s", "1-1", "a", "late");
+        });
+        writer.start();
+
+        String result = reply("XREAD", "BLOCK", "3000", "STREAMS", "s", "0");
+        writer.join();
+
+        assertTrue(result.contains("$4\r\nlate\r\n"), result);
+    }
+
+    @Test
+    void blockingXreadWithDollarOnlySeesLaterEntries() throws InterruptedException {
+        reply("XADD", "s", "1-1", "a", "early");
+
+        Thread writer = new Thread(() -> {
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            reply("XADD", "s", "2-1", "a", "later");
+        });
+        writer.start();
+
+        String result = reply("XREAD", "BLOCK", "3000", "STREAMS", "s", "$");
+        writer.join();
+
+        assertTrue(result.contains("$5\r\nlater\r\n"), result);
+        assertFalse(result.contains("early"), result);
+    }
+
+    @Test
+    void blockingXreadRejectsBadTimeout() {
+        assertEquals("-ERR timeout is not an integer or out of range\r\n",
+                reply("XREAD", "BLOCK", "soon", "STREAMS", "s", "0"));
+        assertEquals("-ERR timeout is negative\r\n",
+                reply("XREAD", "BLOCK", "-1", "STREAMS", "s", "0"));
     }
 }

@@ -16,6 +16,7 @@ public class CommandDispatcher {
 
         return switch (name) {
             case "PING" -> ping(command);
+            case "ECHO" -> echo(command);
             default ->  RespWriter.error("ERR unknown command '" + command[0] + "'");
         };
     }
@@ -29,6 +30,14 @@ public class CommandDispatcher {
             return RespWriter.bulkString(command[1]);
         }
         return RespWriter.error("ERR wrong number of arguments for 'ping' command");
+    }
+
+    private static byte[] echo(String[] command) {
+        if (command.length != 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'echo' command");
+        }
+
+        return RespWriter.bulkString(command[1]);
     }
 
 }

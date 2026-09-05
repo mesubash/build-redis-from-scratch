@@ -51,4 +51,36 @@ public class CommandDispatcherTest {
         assertTrue(reply().startsWith("-ERR"));
     }
 
+    @Test
+    void echoReturnsItsArgument() {
+        assertEquals("$9\r\nhey there\r\n", reply("ECHO", "hey there"));
+    }
+
+    @Test
+    void echoIsCaseInsensitiveButItsArgumentIsNot() {
+        assertEquals("$5\r\nHeLLo\r\n", reply("echo", "HeLLo"));
+    }
+
+    @Test
+    void echoEmptyStringIsAValueNotAnError() {
+        assertEquals("$0\r\n\r\n", reply("ECHO", ""));
+    }
+
+    @Test
+    void echoWithoutArgumentIsAnError() {
+        assertEquals("-ERR wrong number of arguments for 'echo' command\r\n", reply("ECHO"));
+    }
+
+    @Test
+    void echoWithTwoArgumentsIsAnError() {
+        assertEquals("-ERR wrong number of arguments for 'echo' command\r\n",
+                reply("ECHO", "a", "b"));
+    }
+
+    @Test
+    void echoArgumentMayContainCrlf() {
+        // bulk string, so the payload is safe - a simple string would break here
+        assertEquals("$5\r\na\r\nbc\r\n", reply("ECHO", "a\r\nbc"));
+    }
+
 }

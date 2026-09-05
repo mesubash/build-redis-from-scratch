@@ -39,6 +39,16 @@ class StringAndTtlCommandsTest {
     }
 
     @Test
+    void ttlRoundsSecondsUp() {
+        reply("SET", "k", "v", "PX", "5000");
+        now = millis(1);
+
+        // 4999ms left is reported as 5 seconds, not 4
+        assertEquals(":5\r\n", reply("TTL", "k"));
+        assertEquals(":4999\r\n", reply("PTTL", "k"));
+    }
+
+    @Test
     void ttlOnAnExpiredKeyIsMinusTwo() {
         reply("SET", "k", "v", "PX", "100");
         now = millis(200);

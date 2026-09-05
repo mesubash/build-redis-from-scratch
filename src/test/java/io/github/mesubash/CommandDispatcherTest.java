@@ -396,4 +396,36 @@ public class CommandDispatcherTest {
         assertEquals("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n",
                 reply("BLPOP", "str", "1"));
     }
+
+    @Test
+    void rpopTakesTheTail() {
+        reply("RPUSH", "l", "a", "b", "c");
+        assertEquals("$1\r\nc\r\n", reply("RPOP", "l"));
+        assertEquals("*2\r\n$1\r\na\r\n$1\r\nb\r\n", reply("LRANGE", "l", "0", "-1"));
+    }
+
+    @Test
+    void rpopOfLastElementDeletesTheKey() {
+        reply("RPUSH", "solo", "only");
+        reply("RPOP", "solo");
+        assertEquals(":0\r\n", reply("EXISTS", "solo"));
+    }
+
+    @Test
+    void lindexSupportsNegativeIndices() {
+        reply("RPUSH", "l", "a", "b", "c");
+        assertEquals("$1\r\na\r\n", reply("LINDEX", "l", "0"));
+        assertEquals("$1\r\nc\r\n", reply("LINDEX", "l", "-1"));
+        assertEquals("$-1\r\n", reply("LINDEX", "l", "5"));
+        assertEquals("$-1\r\n", reply("LINDEX", "l", "-5"));
+        assertEquals("$-1\r\n", reply("LINDEX", "missing", "0"));
+    }
+
+    @Test
+    void rpopAndLindexRejectStringKeys() {
+        String wrongType = "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n";
+        reply("SET", "str", "hello");
+        assertEquals(wrongType, reply("RPOP", "str"));
+        assertEquals(wrongType, reply("LINDEX", "str", "0"));
+    }
 }

@@ -13,7 +13,7 @@ public class CommandDispatcher {
     private static final Set<String> KNOWN_COMMANDS = Set.of(
             "PING", "ECHO", "SET", "GET", "EXISTS", "DEL", "TYPE", "KEYS",
             "INCR", "DECR", "INCRBY", "DECRBY",
-            "RPUSH", "LPUSH", "LRANGE", "LLEN", "LPOP", "BLPOP",
+            "RPUSH", "LPUSH", "LRANGE", "LLEN", "LPOP", "RPOP", "LINDEX", "BLPOP",
             "MULTI", "EXEC", "DISCARD",
             "SUBSCRIBE", "UNSUBSCRIBE", "PUBLISH",
             "XADD", "XRANGE", "XLEN", "XREAD",
@@ -84,6 +84,8 @@ public class CommandDispatcher {
                 case "LRANGE" -> lrange(command);
                 case "LLEN" -> llen(command);
                 case "LPOP" -> lpop(command);
+                case "RPOP" -> rpop(command);
+                case "LINDEX" -> lindex(command);
                 case "BLPOP" -> blpop(command);
                 case "MULTI" -> multi(command, session);
                 case "EXEC" -> exec(command, session);
@@ -274,7 +276,8 @@ public class CommandDispatcher {
         if (millis < 0) {
             return RespWriter.integer(millis);
         }
-        return RespWriter.integer(millis / divisor);
+        // redis rounds seconds up, so TTL right after EXPIRE 5 says 5 rather than 4
+        return RespWriter.integer((millis + divisor - 1) / divisor);
     }
 
     private byte[] expire(String[] command, long multiplier, String name) {
@@ -650,6 +653,27 @@ public class CommandDispatcher {
             return RespWriter.error("ERR wrong number of arguments for 'lpop' command");
         }
         return RespWriter.bulkString(store.lpop(command[1]));
+    }
+
+    private byte[] rpop(String[] command) {
+        if (command.length != 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'rpop' command");
+        }
+        return RespWriter.bulkString(store.rpop(command[1]));
+    }
+
+    private byte[] lindex(String[] command) {
+        if (command.length != 3) {
+            return RespWriter.error("ERR wrong number of arguments for 'lindex' command");
+        }
+
+        long index;
+        try {
+            index = Long.parseLong(command[2]);
+        } catch (NumberFormatException e) {
+            return RespWriter.error("ERR value is not an integer or out of range");
+        }
+        return RespWriter.bulkString(store.lindex(command[1], index));
     }
 
 

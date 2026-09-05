@@ -347,7 +347,34 @@ public class RedisStore {
         return size[0];
     }
 
+    // index into a list, negative counts from the end. null when out of range
+    public String lindex(String key, long index) {
+        long now = clock.getAsLong();
+        String[] value = new String[1];
+
+        data.computeIfPresent(key, (k, existing) -> {
+            if (existing.isExpired(now)) {
+                return null;
+            }
+            List<String> list = existing.asList();
+            long resolved = index < 0 ? list.size() + index : index;
+            if (resolved >= 0 && resolved < list.size()) {
+                value[0] = list.get((int) resolved);
+            }
+            return existing;
+        });
+        return value[0];
+    }
+
     public String lpop(String key) {
+        return pop(key, true);
+    }
+
+    public String rpop(String key) {
+        return pop(key, false);
+    }
+
+    private String pop(String key, boolean fromHead) {
         long now = clock.getAsLong();
         String[] popped = new String[1];
 
@@ -356,7 +383,7 @@ public class RedisStore {
                 return null;
             }
             List<String> list = existing.asList();
-            popped[0] = list.removeFirst();
+            popped[0] = fromHead ? list.removeFirst() : list.removeLast();
 
             //redis has no empty lists, the key goes away with the last element
             return list.isEmpty() ? null : existing;

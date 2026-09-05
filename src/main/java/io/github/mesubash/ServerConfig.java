@@ -26,6 +26,19 @@ public class ServerConfig {
         return Integer.parseInt(values.get("port"));
     }
 
+    public boolean isReplica() {
+        return values.containsKey("replicaof");
+    }
+
+    // --replicaof "host port", the form redis-server takes
+    public String masterHost() {
+        return values.get("replicaof").split("\\s+")[0];
+    }
+
+    public int masterPort() {
+        return Integer.parseInt(values.get("replicaof").split("\\s+")[1]);
+    }
+
     // null for an unknown parameter, which CONFIG GET reports as an empty result
     public String get(String name) {
         return values.get(name.toLowerCase(Locale.ROOT));

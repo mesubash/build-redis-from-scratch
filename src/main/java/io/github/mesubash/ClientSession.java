@@ -75,6 +75,17 @@ public class ClientSession {
         return commands;
     }
 
+    // how many bytes of the replication stream this connection has processed
+    private volatile long replicaOffset;
+
+    public long replicaOffset() {
+        return replicaOffset;
+    }
+
+    public void advanceReplicaOffset(long bytes) {
+        replicaOffset += bytes;
+    }
+
     public Map<String, Long> watched() {
         return watched;
     }

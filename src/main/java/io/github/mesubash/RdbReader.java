@@ -38,7 +38,12 @@ public class RdbReader {
         if (!Files.exists(file)) {
             return List.of();
         }
-        try (InputStream stream = new ByteArrayInputStream(Files.readAllBytes(file))) {
+        return readBytes(Files.readAllBytes(file));
+    }
+
+    // the same parser, for a snapshot that arrived over a socket rather than from disk
+    public static List<Record> readBytes(byte[] snapshot) throws IOException {
+        try (InputStream stream = new ByteArrayInputStream(snapshot)) {
             return new RdbReader(stream).parse();
         }
     }

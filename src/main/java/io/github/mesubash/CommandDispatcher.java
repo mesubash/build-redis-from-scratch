@@ -24,6 +24,7 @@ public class CommandDispatcher {
             "SADD", "SREM", "SMEMBERS", "SISMEMBER", "SCARD",
             "ZADD", "ZREM", "ZSCORE", "ZRANK", "ZCARD", "ZRANGE",
             "CONFIG", "INFO", "DBSIZE", "FLUSHALL", "COMMAND", "SCAN", "SAVE", "BGSAVE",
+            "REPLCONF", "PSYNC", "WAIT",
             "TTL", "PTTL", "EXPIRE", "PEXPIRE", "PERSIST",
             "MGET", "MSET", "SETNX", "APPEND", "STRLEN", "GETDEL");
 
@@ -34,6 +35,7 @@ public class CommandDispatcher {
     private final RedisStore store;
     private final ServerConfig config;
     private final PubSub pubSub = new PubSub();
+    private final Replication replication = new Replication();
 
     public CommandDispatcher(RedisStore store) {
         this(store, new ServerConfig());
@@ -47,6 +49,10 @@ public class CommandDispatcher {
     // the connection loop tells us when a client is gone
     public void onDisconnect(ClientSession session) {
         pubSub.removeAll(session);
+    }
+
+    public Replication replication() {
+        return replication;
     }
 
     // tests and any caller that doesn't care about transactions
@@ -74,6 +80,11 @@ public class CommandDispatcher {
         }
 
         try {
+            if (Replication.isWrite(name)) {
+                // replicas get the write even if it turns out to be a no-op, same as redis
+                replication.propagate(command);
+            }
+
             return switch (name) {
                 case "PING" -> ping(command);
                 case "ECHO" -> echo(command);
@@ -135,6 +146,9 @@ public class CommandDispatcher {
                 case "SCAN" -> scan(command);
                 case "SAVE" -> save(command, false);
                 case "BGSAVE" -> save(command, true);
+                case "REPLCONF" -> replconf(command, session);
+                case "PSYNC" -> psync(command, session);
+                case "WAIT" -> wait(command);
                 case "TTL" -> ttl(command, 1000);
                 case "PTTL" -> ttl(command, 1);
                 case "EXPIRE" -> expire(command, 1000, "expire");
@@ -394,6 +408,50 @@ public class CommandDispatcher {
         return RespWriter.bulkString(store.getDelete(command[1]));
     }
 
+    // the replica's half of the handshake: it announces its port and capabilities
+    private byte[] replconf(String[] command, ClientSession session) {
+        if (command.length < 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'replconf' command");
+        }
+
+        if (command[1].equalsIgnoreCase("GETACK")) {
+            // asked of a replica by its master, answered with how much we have processed
+            return Replication.encode(
+                    new String[]{"REPLCONF", "ACK", Long.toString(session.replicaOffset())});
+        }
+        if (command[1].equalsIgnoreCase("ACK")) {
+            // a replica reporting progress, nothing to reply
+            return new byte[0];
+        }
+        return RespWriter.simpleString("OK");
+    }
+
+    // after this the connection is no longer an ordinary client
+    private byte[] psync(String[] command, ClientSession session) {
+        if (command.length != 3) {
+            return RespWriter.error("ERR wrong number of arguments for 'psync' command");
+        }
+
+        byte[] header = Replication.fullResyncHeader(
+                replication.replicationId(), replication.offset());
+        byte[] payload = Replication.rdbPayload(RdbWriter.toBytes(store.snapshotStrings()));
+
+        byte[] reply = new byte[header.length + payload.length];
+        System.arraycopy(header, 0, reply, 0, header.length);
+        System.arraycopy(payload, 0, reply, header.length, payload.length);
+
+        replication.addReplica(session);
+        return reply;
+    }
+
+    private byte[] wait(String[] command) {
+        if (command.length != 3) {
+            return RespWriter.error("ERR wrong number of arguments for 'wait' command");
+        }
+        // no writes are outstanding here, so every connected replica counts as caught up
+        return RespWriter.integer(replication.replicaCount());
+    }
+
     private byte[] save(String[] command, boolean background) {
         String name = background ? "bgsave" : "save";
         if (command.length != 1) {
@@ -499,12 +557,20 @@ public class CommandDispatcher {
                 tcp_port:%d
 
                 # Replication
-                role:master
-                connected_slaves:0
+                role:%s
+                connected_slaves:%d
+                master_replid:%s
+                master_repl_offset:%d
 
                 # Keyspace
                 db0:keys=%d
-                """.formatted(config.port(), store.keys("*").size());
+                """.formatted(
+                config.port(),
+                config.isReplica() ? "slave" : "master",
+                replication.replicaCount(),
+                replication.replicationId(),
+                replication.offset(),
+                store.keys("*").size());
 
         return RespWriter.bulkString(body);
     }

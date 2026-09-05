@@ -15,6 +15,18 @@ public class RdbWriter {
 
     // written to a temp file first, so a crash mid-write can't leave a half snapshot behind
     public static void write(Path file, List<RdbReader.Record> records) throws IOException {
+        byte[] snapshot = toBytes(records);
+
+        Path directory = file.toAbsolutePath().getParent();
+        Files.createDirectories(directory);
+
+        Path temp = Files.createTempFile(directory, "dump", ".rdb");
+        Files.write(temp, snapshot);
+        Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+    }
+
+    // the same bytes a replica receives during a full resync
+    public static byte[] toBytes(List<RdbReader.Record> records) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         out.writeBytes(MAGIC.getBytes(StandardCharsets.US_ASCII));
 
@@ -42,12 +54,7 @@ public class RdbWriter {
         // redis skips checksum verification when it is zero, which saves implementing crc64
         out.writeBytes(new byte[8]);
 
-        Path directory = file.toAbsolutePath().getParent();
-        Files.createDirectories(directory);
-
-        Path temp = Files.createTempFile(directory, "dump", ".rdb");
-        Files.write(temp, out.toByteArray());
-        Files.move(temp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        return out.toByteArray();
     }
 
     private static void writeAux(ByteArrayOutputStream out, String key, String value) {

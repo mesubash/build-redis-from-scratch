@@ -30,6 +30,10 @@ public class Main {
 
             CommandDispatcher dispatcher = new CommandDispatcher(store, config);
 
+            if (config.isReplica()) {
+                new ReplicaClient(config, store, dispatcher).start();
+            }
+
             while (true) {
                 // blocks until the kernel has a complete connection waiting for us
                 Socket clientSocket = serverSocket.accept();

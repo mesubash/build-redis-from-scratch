@@ -259,4 +259,62 @@ public class CommandDispatcherTest {
         assertEquals("-ERR wrong number of arguments for 'keys' command\r\n", reply("KEYS"));
         assertEquals("-ERR wrong number of arguments for 'keys' command\r\n", reply("KEYS", "a", "b"));
     }
+
+    @Test
+    void incrementCommands() {
+        reply("SET", "counter", "10");
+        assertEquals(":11\r\n", reply("INCR", "counter"));
+        assertEquals(":16\r\n", reply("INCRBY", "counter", "5"));
+        assertEquals(":15\r\n", reply("DECR", "counter"));
+        assertEquals(":10\r\n", reply("DECRBY", "counter", "5"));
+    }
+
+    @Test
+    void incrOnMissingKeyReturnsOne() {
+        assertEquals(":1\r\n", reply("INCR", "fresh"));
+    }
+
+    @Test
+    void incrementedValueIsStillAString() {
+        reply("SET", "counter", "10");
+        reply("INCR", "counter");
+        assertEquals("$2\r\n11\r\n", reply("GET", "counter"));
+        assertEquals("+string\r\n", reply("TYPE", "counter"));
+    }
+
+    @Test
+    void incrOnNonNumericValueIsAnError() {
+        reply("SET", "word", "hello");
+        assertEquals("-ERR value is not an integer or out of range\r\n", reply("INCR", "word"));
+    }
+
+    @Test
+    void nonNumericIncrementArgumentIsAnError() {
+        assertEquals("-ERR value is not an integer or out of range\r\n",
+                reply("INCRBY", "counter", "abc"));
+    }
+
+    @Test
+    void overflowIsAnError() {
+        reply("SET", "c", Long.toString(Long.MAX_VALUE));
+        assertEquals("-ERR increment or decrement would overflow\r\n", reply("INCR", "c"));
+    }
+
+    @Test
+    void decrbyLongMinValueIsAnErrorNotAWrap() {
+        // negating Long.MIN_VALUE overflows
+        assertEquals("-ERR increment or decrement would overflow\r\n",
+                reply("DECRBY", "c", Long.toString(Long.MIN_VALUE)));
+    }
+
+    @Test
+    void incrementCommandsRejectWrongArity() {
+        assertEquals("-ERR wrong number of arguments for 'incr' command\r\n", reply("INCR"));
+        assertEquals("-ERR wrong number of arguments for 'decr' command\r\n",
+                reply("DECR", "a", "b"));
+        assertEquals("-ERR wrong number of arguments for 'incrby' command\r\n",
+                reply("INCRBY", "k"));
+        assertEquals("-ERR wrong number of arguments for 'decrby' command\r\n",
+                reply("DECRBY", "k"));
+    }
 }

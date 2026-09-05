@@ -30,6 +30,10 @@ public class CommandDispatcher {
             case "DEL" -> del(command);
             case "TYPE" -> type(command);
             case "KEYS" -> keys(command);
+            case "INCR" -> incrementBy(command, 1, "incr");
+            case "DECR" -> incrementBy(command, -1, "decr");
+            case "INCRBY" -> incrementByArgument(command, false);
+            case "DECRBY" -> incrementByArgument(command, true);
             default ->  RespWriter.error("ERR unknown command '" + command[0] + "'");
         };
     }
@@ -139,6 +143,50 @@ public class CommandDispatcher {
             encoded[i] = RespWriter.bulkString(matches.get(i));
         }
         return RespWriter.array(encoded);
+    }
+
+    private byte[] incrementBy(String[] command, long delta, String name) {
+        if ( command.length != 2){
+            return RespWriter.error("ERR wrong number of arguments for '" + name + "' command");
+        }
+        return applyIncrement(command[1], delta);
+
+    }
+
+    private byte[] incrementByArgument(String[] command, boolean negate) {
+        String name = negate ? "decrby": "incrby";
+        if (command.length != 3){
+            return RespWriter.error("ERR wrong number of arguments for '" + name + "' command");
+        }
+        long delta;
+
+        try {
+            delta = Long.parseLong(command[2]);
+
+            //negating Long.MIN_VALUE overflows, so let negateExact reject it
+
+            if ( negate ){
+                delta = Math.negateExact(delta);
+            }
+        }catch (NumberFormatException e){
+            return RespWriter.error("ERR value is not an integer or out of range");
+        }catch (ArithmeticException e){
+            return RespWriter.error("ERR increment or decrement would overflow");
+        }
+        return applyIncrement(command[1], delta);
+
+    }
+
+    private byte[] applyIncrement(String key, long delta) {
+        try {
+            return RespWriter.integer(store.increment(key, delta));
+
+        }catch (NumberFormatException e){
+            return RespWriter.error("ERR value is not an integer or out of range");
+
+        }catch (ArithmeticException e){
+            return RespWriter.error("ERR increment or decrement would overflow");
+        }
     }
 
 }

@@ -9,6 +9,7 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RedisStoreTest {
@@ -182,5 +183,84 @@ class RedisStoreTest {
         store.set("a.b", "v");
         store.set("axb", "v");
         assertEquals(List.of("a.b"), store.keys("a.b"));
+    }
+
+    @Test
+    void incrementCreatesMissingKeyAtDelta() {
+        assertEquals(1, store.increment("fresh", 1));
+        assertEquals("1", store.get("fresh"));
+    }
+
+    @Test
+    void incrementAddsToExistingValue() {
+        store.set("c", "10");
+        assertEquals(11, store.increment("c", 1));
+        assertEquals(16, store.increment("c", 5));
+        assertEquals(15, store.increment("c", -1));
+    }
+
+    @Test
+    void incrementStoresTheResultAsAString() {
+        store.set("c", "10");
+        store.increment("c", 1);
+        assertEquals("11", store.get("c"));
+        assertEquals("string", store.type("c"));
+    }
+
+    @Test
+    void incrementOnExpiredKeyStartsFromZero() {
+        store.set("c", "100", 100);
+        now = millis(200);
+        assertEquals(1, store.increment("c", 1));
+    }
+
+    @Test
+    void incrementPreservesAnExistingTtl() {
+        store.set("tick", "0", 100);
+        now = millis(50);
+        store.increment("tick", 1);
+
+        // incrementing must not make the counter immortal
+        now = millis(150);
+        assertNull(store.get("tick"));
+    }
+
+    @Test
+    void incrementOnNonNumericValueThrows() {
+        store.set("word", "hello");
+        assertThrows(NumberFormatException.class, () -> store.increment("word", 1));
+
+        // a failed increment must leave the value untouched
+        assertEquals("hello", store.get("word"));
+    }
+
+    @Test
+    void incrementOverflowThrows() {
+        store.set("c", Long.toString(Long.MAX_VALUE));
+        assertThrows(ArithmeticException.class, () -> store.increment("c", 1));
+        assertEquals(Long.toString(Long.MAX_VALUE), store.get("c"));
+    }
+
+    @Test
+    void concurrentIncrementsLoseNothing() throws InterruptedException {
+        // fails reliably against a get-then-set implementation
+        RedisStore shared = new RedisStore();
+        int threads = 4;
+        int perThread = 1000;
+
+        Thread[] workers = new Thread[threads];
+        for (int t = 0; t < threads; t++) {
+            workers[t] = new Thread(() -> {
+                for (int i = 0; i < perThread; i++) {
+                    shared.increment("counter", 1);
+                }
+            });
+            workers[t].start();
+        }
+        for (Thread worker : workers) {
+            worker.join();
+        }
+
+        assertEquals(Long.toString((long) threads * perThread), shared.get("counter"));
     }
 }

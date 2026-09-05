@@ -98,6 +98,27 @@ public class RedisStore {
         return Pattern.compile(regex.toString(), Pattern.DOTALL);
     }
 
+    // read-modif-write must happen inside compute(), or concurrent increments get lost.
+    // throws NumberFormatExeception if the stored value isn't an interger,
+    // ArthmeticExceptoin on overflow
+    public long increment(String key, long delta) {
+        long now = clock.getAsLong();
+        long[] result = new long[1];
+
+        data.compute(key, (k, existing) -> {
+            //an expired key is a missing key, so start from 0 rather than the stale value
+            boolean usable = existing != null && !existing.isExpired(now);
+
+            long current = usable ? Long.parseLong(existing.value()) : 0L;
+            result[0] = Math.addExact(current, delta);
+
+            // a live key keeps its ttl, incrementing must not make a counter immortal
+            long expiry = usable ? existing.expiresAtNanos() : NEVER;
+            return new Entry(Long.toString(result[0]), expiry);
+        });
+        return result[0];
+    }
+
     private long expiryFrom(long ttlMillis) {
         long ttlNanos = ttlMillis * 1_000_000L;
         long expiry = clock.getAsLong() + ttlNanos;

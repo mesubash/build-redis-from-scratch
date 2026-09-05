@@ -40,10 +40,13 @@ $ redis-cli ttl name
 
 **Pub/Sub** `SUBSCRIBE` · `UNSUBSCRIBE` · `PUBLISH`
 
-**Server** `CONFIG GET` · `INFO` · `DBSIZE` · `FLUSHALL` · `PING` · `ECHO` · `COMMAND`
+**Server** `CONFIG GET` · `INFO` · `DBSIZE` · `FLUSHALL` · `SAVE` · `BGSAVE` · `PING` · `ECHO` · `COMMAND`
 
 Keys expire lazily, values are binary-safe, and every command runs concurrently across
 thread-per-connection workers.
+
+String keys persist to an RDB snapshot on `SAVE`, and load on startup. The format is real
+enough that `redis-server` reads our files and we read its.
 
 ## How it fits together
 
@@ -72,6 +75,7 @@ RespParser ──────► String[]  ──────► CommandDispatch
 | `RedisStream` / `StreamId` / `StreamEntry` | the stream type |
 | `RedisSortedSet` | score index plus ordering, for sorted sets |
 | `ServerConfig` | command line options, `CONFIG GET` |
+| `RdbReader` / `RdbWriter` | the RDB snapshot format, strings only |
 
 Two boundaries carry the design: nothing outside `RespParser`/`RespWriter` touches `\r\n`, and
 nothing outside `RedisStore` decides whether a key has expired.
@@ -82,15 +86,18 @@ nothing outside `RedisStore` decides whether a key has expired.
 mvn test
 ```
 
-264 tests. The ones worth reading are the concurrency cases in `RedisStoreTest` — concurrent
+281 tests. The ones worth reading are the concurrency cases in `RedisStoreTest` — concurrent
 `INCR` and `RPUSH` that fail against a read-then-write implementation and pass against
 `compute()` — and `WatchTest.everyMutatingCommandInvalidatesAWatch`, which catches a new write
 command forgetting to bump the version counter.
 
 ## Not implemented
 
-RDB persistence, replication, consumer groups, `CONFIG SET`, and set algebra
-(`SINTER`/`SUNION`/`SDIFF`). Every one is a known gap rather than an oversight.
+Replication, consumer groups, `CONFIG SET`, set algebra (`SINTER`/`SUNION`/`SDIFF`), and AOF.
+
+RDB handles strings only — lists, hashes, sets, sorted sets and streams are skipped when
+saving, because writing them needs redis's listpack and quicklist encodings. Snapshots also
+carry a zero checksum, which redis accepts and treats as "verification disabled".
 
 `SCAN` uses a sorted index as its cursor rather than redis's reverse-binary bucket walk — the
 interface is right, the algorithm is a simplification, and it is marked as one in the code.

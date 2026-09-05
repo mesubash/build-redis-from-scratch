@@ -24,6 +24,13 @@ public class RedisStore {
             throw new WrongTypeException();
         }
 
+        RedisStream asStream(){
+            if (value instanceof RedisStream stream){
+                return stream;
+            }
+            throw new WrongTypeException();
+        }
+
         @SuppressWarnings("unchecked")
         List<String> asList(){
             if (value instanceof List<?> list){
@@ -92,6 +99,9 @@ public class RedisStore {
 
         if (entry == null) {
             return "none";
+        }
+        if (entry.value() instanceof RedisStream) {
+            return "stream";
         }
         return entry.value() instanceof List ? "list" : "string";
     }
@@ -256,6 +266,110 @@ public class RedisStore {
             return list.isEmpty() ? null : existing;
         });
         return popped[0];
+    }
+
+    // returns the id actually used. throws IllegalArgumentException with redis's own wording
+    public String xadd(String key, String rawId, List<String> fields) {
+        long now = clock.getAsLong();
+        String[] assigned = new String[1];
+
+        data.compute(key, (k, existing) -> {
+            boolean usable = existing != null && !existing.isExpired(now);
+            RedisStream stream = usable ? existing.asStream() : new RedisStream();
+
+            StreamId id = resolveId(rawId, stream.lastId());
+            if (id.compareTo(StreamId.MIN) <= 0) {
+                throw new IllegalArgumentException(
+                        "ERR The ID specified in XADD must be greater than 0-0");
+            }
+            if (id.compareTo(stream.lastId()) <= 0) {
+                throw new IllegalArgumentException(
+                        "ERR The ID specified in XADD is equal or smaller than the target stream top item");
+            }
+
+            stream.append(new StreamEntry(id, List.copyOf(fields)));
+            assigned[0] = id.toString();
+
+            long expiry = usable ? existing.expiresAtNanos() : NEVER;
+            return new Entry(stream, expiry);
+        });
+
+        return assigned[0];
+    }
+
+    // "*" picks everything, "5-*" picks only the sequence
+    private static StreamId resolveId(String rawId, StreamId lastId) {
+        if (rawId.equals("*")) {
+            long ms = System.currentTimeMillis();
+            return ms == lastId.ms() ? new StreamId(ms, lastId.seq() + 1) : new StreamId(ms, 0);
+        }
+        if (rawId.endsWith("-*")) {
+            long ms = Long.parseLong(rawId.substring(0, rawId.length() - 2));
+            // a sequence restarts at 0 for a new millisecond, and at 1 for time 0
+            long seq = ms == lastId.ms() ? lastId.seq() + 1 : (ms == 0 ? 1 : 0);
+            return new StreamId(ms, seq);
+        }
+        try {
+            return StreamId.parse(rawId, 0);
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException("ERR Invalid stream ID specified as stream command argument");
+        }
+    }
+
+    public List<StreamEntry> xrange(String key, String rawStart, String rawEnd) {
+        StreamId from = rawStart.equals("-") ? StreamId.MIN : StreamId.parse(rawStart, 0);
+        StreamId to = rawEnd.equals("+") ? StreamId.MAX : StreamId.parse(rawEnd, Long.MAX_VALUE);
+        return readRange(key, from, to, false);
+    }
+
+    // XREAD is exclusive - it wants what arrived after the id the client already has
+    public List<StreamEntry> xread(String key, String rawAfter) {
+        StreamId after = rawAfter.equals("$")
+                ? lastStreamId(key)
+                : StreamId.parse(rawAfter, 0);
+        return readRange(key, after, StreamId.MAX, true);
+    }
+
+    public long xlen(String key) {
+        long now = clock.getAsLong();
+        long[] size = new long[1];
+
+        data.computeIfPresent(key, (k, existing) -> {
+            if (existing.isExpired(now)) {
+                return null;
+            }
+            size[0] = existing.asStream().entries().size();
+            return existing;
+        });
+        return size[0];
+    }
+
+    public StreamId lastStreamId(String key) {
+        long now = clock.getAsLong();
+        StreamId[] last = {StreamId.MIN};
+
+        data.computeIfPresent(key, (k, existing) -> {
+            if (existing.isExpired(now)) {
+                return null;
+            }
+            last[0] = existing.asStream().lastId();
+            return existing;
+        });
+        return last[0];
+    }
+
+    private List<StreamEntry> readRange(String key, StreamId from, StreamId to, boolean exclusive) {
+        long now = clock.getAsLong();
+        List<StreamEntry> result = new ArrayList<>();
+
+        data.computeIfPresent(key, (k, existing) -> {
+            if (existing.isExpired(now)) {
+                return null;
+            }
+            result.addAll(existing.asStream().range(from, to, exclusive));
+            return existing;
+        });
+        return result;
     }
 
     //negative indices count from the end, then clamp to 0

@@ -1,6 +1,7 @@
 package io.github.mesubash;
 
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
@@ -14,7 +15,8 @@ public class CommandDispatcher {
             "INCR", "DECR", "INCRBY", "DECRBY",
             "RPUSH", "LPUSH", "LRANGE", "LLEN", "LPOP", "BLPOP",
             "MULTI", "EXEC", "DISCARD",
-            "SUBSCRIBE", "UNSUBSCRIBE", "PUBLISH");
+            "SUBSCRIBE", "UNSUBSCRIBE", "PUBLISH",
+            "XADD", "XRANGE", "XLEN", "XREAD");
 
     // once subscribed a connection may only do these
     private static final Set<String> SUBSCRIBED_MODE_COMMANDS =
@@ -80,6 +82,10 @@ public class CommandDispatcher {
                 case "SUBSCRIBE" -> subscribe(command, session);
                 case "UNSUBSCRIBE" -> unsubscribe(command, session);
                 case "PUBLISH" -> publish(command);
+                case "XADD" -> xadd(command);
+                case "XRANGE" -> xrange(command);
+                case "XLEN" -> xlen(command);
+                case "XREAD" -> xread(command);
                 default ->  RespWriter.error("ERR unknown command '" + command[0] + "'");
             };
         }catch (WrongTypeException e){
@@ -229,6 +235,101 @@ public class CommandDispatcher {
             return RespWriter.error("ERR wrong number of arguments for 'llen' command");
         }
         return RespWriter.integer(store.llen(command[1]));
+    }
+
+    private byte[] xadd(String[] command) {
+        // key, id, then at least one field/value pair
+        if (command.length < 5 || (command.length - 3) % 2 != 0) {
+            return RespWriter.error("ERR wrong number of arguments for 'xadd' command");
+        }
+
+        List<String> fields = Arrays.asList(Arrays.copyOfRange(command, 3, command.length));
+        try {
+            return RespWriter.bulkString(store.xadd(command[1], command[2], fields));
+        } catch (IllegalArgumentException e) {
+            // the store carries redis's own wording, so pass it straight through
+            return RespWriter.error(e.getMessage());
+        }
+    }
+
+    private byte[] xrange(String[] command) {
+        if (command.length != 4) {
+            return RespWriter.error("ERR wrong number of arguments for 'xrange' command");
+        }
+        try {
+            return encodeEntries(store.xrange(command[1], command[2], command[3]));
+        } catch (NumberFormatException e) {
+            return RespWriter.error("ERR Invalid stream ID specified as stream command argument");
+        }
+    }
+
+    private byte[] xlen(String[] command) {
+        if (command.length != 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'xlen' command");
+        }
+        return RespWriter.integer(store.xlen(command[1]));
+    }
+
+    // XREAD STREAMS key [key...] id [id...] - the halves after STREAMS must match up
+    private byte[] xread(String[] command) {
+        int streamsAt = -1;
+        for (int i = 1; i < command.length; i++) {
+            if (command[i].equalsIgnoreCase("STREAMS")) {
+                streamsAt = i;
+                break;
+            }
+        }
+        if (streamsAt < 0) {
+            return RespWriter.error("ERR syntax error");
+        }
+
+        int remaining = command.length - streamsAt - 1;
+        if (remaining < 2 || remaining % 2 != 0) {
+            return RespWriter.error(
+                    "ERR Unbalanced XREAD list of streams: for each stream key an ID or '$' must be specified.");
+        }
+
+        int pairs = remaining / 2;
+        List<byte[]> results = new ArrayList<>();
+        try {
+            for (int i = 0; i < pairs; i++) {
+                String key = command[streamsAt + 1 + i];
+                String id = command[streamsAt + 1 + pairs + i];
+
+                List<StreamEntry> entries = store.xread(key, id);
+                if (entries.isEmpty()) {
+                    // streams with nothing new are left out entirely
+                    continue;
+                }
+                results.add(RespWriter.array(RespWriter.bulkString(key), encodeEntries(entries)));
+            }
+        } catch (NumberFormatException e) {
+            return RespWriter.error("ERR Invalid stream ID specified as stream command argument");
+        }
+
+        if (results.isEmpty()) {
+            return RespWriter.nullArray();
+        }
+        return RespWriter.array(results.toArray(new byte[0][]));
+    }
+
+    // each entry is [id, [field, value, ...]]
+    private static byte[] encodeEntries(List<StreamEntry> entries) {
+        byte[][] encoded = new byte[entries.size()][];
+        for (int i = 0; i < entries.size(); i++) {
+            StreamEntry entry = entries.get(i);
+
+            List<String> fields = entry.fields();
+            byte[][] encodedFields = new byte[fields.size()][];
+            for (int f = 0; f < fields.size(); f++) {
+                encodedFields[f] = RespWriter.bulkString(fields.get(f));
+            }
+
+            encoded[i] = RespWriter.array(
+                    RespWriter.bulkString(entry.id().toString()),
+                    RespWriter.array(encodedFields));
+        }
+        return RespWriter.array(encoded);
     }
 
     // one confirmation array per channel, each carrying the running subscription count

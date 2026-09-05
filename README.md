@@ -100,6 +100,11 @@ mvn test
 `compute()` — and `WatchTest.everyMutatingCommandInvalidatesAWatch`, which catches a new write
 command forgetting to bump the version counter.
 
+## Roadmap
+
+[ROADMAP.md](./ROADMAP.md) tracks what is built, what is deliberately simplified, and what is left,
+with the process for adding the next stage. It is updated as the code moves.
+
 ## Not implemented
 
 Consumer groups, `CONFIG SET`, set algebra (`SINTER`/`SUNION`/`SDIFF`), and AOF.

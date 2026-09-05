@@ -370,4 +370,30 @@ public class CommandDispatcherTest {
     void singleValuePushIsValid() {
         assertEquals(":1\r\n", reply("RPUSH", "k", "one"));
     }
+
+    @Test
+    void blpopReturnsKeyAndValue() {
+        reply("RPUSH", "l", "a");
+        assertEquals("*2\r\n$1\r\nl\r\n$1\r\na\r\n", reply("BLPOP", "l", "1"));
+    }
+
+    @Test
+    void blpopTimeoutReturnsNullArray() {
+        // null array, not an empty array - clients tell them apart
+        assertEquals("*-1\r\n", reply("BLPOP", "empty", "0.1"));
+    }
+
+    @Test
+    void blpopRejectsBadTimeout() {
+        assertEquals("-ERR timeout is not a float or out of range\r\n", reply("BLPOP", "l", "abc"));
+        assertEquals("-ERR timeout is negative\r\n", reply("BLPOP", "l", "-1"));
+        assertEquals("-ERR wrong number of arguments for 'blpop' command\r\n", reply("BLPOP", "l"));
+    }
+
+    @Test
+    void blpopOnAStringKeyIsWrongType() {
+        reply("SET", "str", "hello");
+        assertEquals("-WRONGTYPE Operation against a key holding the wrong kind of value\r\n",
+                reply("BLPOP", "str", "1"));
+    }
 }

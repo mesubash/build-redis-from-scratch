@@ -6,6 +6,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -369,5 +370,78 @@ class RedisStoreTest {
         }
 
         assertEquals((long) threads * perThread, shared.llen("l"));
+    }
+
+    @Test
+    void blockingPopReturnsImmediatelyWhenDataIsThere() throws InterruptedException {
+        store.push("l", false, "a");
+        assertArrayEquals(new String[]{"l", "a"}, store.blockingPop(new String[]{"l"}, 1000));
+    }
+
+    @Test
+    void blockingPopChecksKeysInOrder() throws InterruptedException {
+        store.push("second", false, "b");
+        store.push("first", false, "a");
+        assertArrayEquals(new String[]{"first", "a"},
+                store.blockingPop(new String[]{"first", "second"}, 1000));
+    }
+
+    @Test
+    void blockingPopTimesOut() throws InterruptedException {
+        long before = System.currentTimeMillis();
+        assertNull(store.blockingPop(new String[]{"empty"}, 150));
+
+        // it really waited rather than returning straight away
+        assertTrue(System.currentTimeMillis() - before >= 140);
+    }
+
+    @Test
+    void blockingPopWakesOnAPushFromAnotherThread() throws InterruptedException {
+        RedisStore shared = new RedisStore();
+
+        Thread pusher = new Thread(() -> {
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            shared.push("l", false, "late");
+        });
+        pusher.start();
+
+        String[] popped = shared.blockingPop(new String[]{"l"}, 3000);
+        pusher.join();
+
+        assertArrayEquals(new String[]{"l", "late"}, popped);
+    }
+
+    @Test
+    void onlyOneWaiterGetsAPushedElement() throws InterruptedException {
+        RedisStore shared = new RedisStore();
+        String[][] results = new String[2][];
+
+        Thread a = new Thread(() -> results[0] = popQuietly(shared));
+        Thread b = new Thread(() -> results[1] = popQuietly(shared));
+        a.start();
+        b.start();
+        Thread.sleep(100);
+
+        shared.push("l", false, "only");
+        a.join();
+        b.join();
+
+        // exactly one waiter got it, the other timed out
+        int winners = (results[0] != null ? 1 : 0) + (results[1] != null ? 1 : 0);
+        assertEquals(1, winners);
+    }
+
+    private static String[] popQuietly(RedisStore store) {
+        try {
+            return store.blockingPop(new String[]{"l"}, 1000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
     }
 }

@@ -41,6 +41,10 @@ public class RedisStore {
     //nanoTime is monotonic - wall clock jumps backwards and would resurrect expired keys
     private final LongSupplier clock;
 
+    // ponytail: one monitor for every list, so a push wakes all waiters and most go back to
+    // sleep. per-key monitors if a real workload ever makes the herd measurable
+    private final Object listMonitor = new Object();
+
     public RedisStore() {
         this(System::nanoTime);
     }
@@ -160,7 +164,40 @@ public class RedisStore {
             long expiry = usable ? existing.expiresAtNanos() : NEVER;
             return new Entry(list, expiry);
         });
+
+        // a blocked BLPOP is waiting for exactly this
+        synchronized (listMonitor) {
+            listMonitor.notifyAll();
+        }
+
         return length[0];
+    }
+
+    // blocks until one of the keys has an element or the timeout passes.
+    // returns [key, value], or null on timeout. timeoutMillis of 0 waits forever
+    public String[] blockingPop(String[] keys, long timeoutMillis) throws InterruptedException {
+        long deadline = timeoutMillis == 0 ? Long.MAX_VALUE : System.currentTimeMillis() + timeoutMillis;
+
+        synchronized (listMonitor) {
+            while (true) {
+                // keys are checked in order, so an earlier key wins when both have data
+                for (String key : keys) {
+                    String value = lpop(key);
+                    if (value != null) {
+                        return new String[]{key, value};
+                    }
+                }
+
+                long remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0) {
+                    return null;
+                }
+
+                // wait() releases the monitor, so a pushing thread can get in and notify us.
+                // the surrounding loop re-checks because notifyAll wakes every waiter
+                listMonitor.wait(Math.min(remaining, 100));
+            }
+        }
     }
 
     public List<String> lrange(String key, long start, long stop){

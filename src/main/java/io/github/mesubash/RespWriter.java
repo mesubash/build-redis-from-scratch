@@ -9,6 +9,7 @@ public class RespWriter {
 
     private static final byte[] CRLF = "\r\n".getBytes(StandardCharsets.UTF_8);
     private static final byte[] NULL_BULK = "$-1\r\n".getBytes(StandardCharsets.UTF_8);
+    private static final byte[] NULL_ARRAY = "*-1\r\n".getBytes(StandardCharsets.UTF_8);
 
     // never build one of these from user data, it has no length prefix
     public static byte[] simpleString(String value) {
@@ -35,6 +36,11 @@ public class RespWriter {
         out.writeBytes(payload);
         out.writeBytes(CRLF);
         return out.toByteArray();
+    }
+
+    // what a blocking command returns when it times out - not the same as an empty array
+    public static byte[] nullArray() {
+        return NULL_ARRAY;
     }
 
     // elements are already encoded, so nesting costs nothing

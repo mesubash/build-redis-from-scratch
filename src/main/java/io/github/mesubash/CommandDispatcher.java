@@ -41,6 +41,7 @@ public class CommandDispatcher {
                 case "LRANGE" -> lrange(command);
                 case "LLEN" -> llen(command);
                 case "LPOP" -> lpop(command);
+                case "BLPOP" -> blpop(command);
                 default ->  RespWriter.error("ERR unknown command '" + command[0] + "'");
             };
         }catch (WrongTypeException e){
@@ -190,6 +191,35 @@ public class CommandDispatcher {
             return RespWriter.error("ERR wrong number of arguments for 'llen' command");
         }
         return RespWriter.integer(store.llen(command[1]));
+    }
+
+    private byte[] blpop(String[] command) {
+        if (command.length < 3) {
+            return RespWriter.error("ERR wrong number of arguments for 'blpop' command");
+        }
+
+        double seconds;
+        try {
+            seconds = Double.parseDouble(command[command.length - 1]);
+        } catch (NumberFormatException e) {
+            return RespWriter.error("ERR timeout is not a float or out of range");
+        }
+        if (seconds < 0) {
+            return RespWriter.error("ERR timeout is negative");
+        }
+
+        String[] keys = Arrays.copyOfRange(command, 1, command.length - 1);
+        try {
+            String[] popped = store.blockingPop(keys, (long) (seconds * 1000));
+            if (popped == null) {
+                return RespWriter.nullArray();
+            }
+            return RespWriter.array(RespWriter.bulkString(popped[0]), RespWriter.bulkString(popped[1]));
+        } catch (InterruptedException e) {
+            // the client's own thread was interrupted, treat it as a timeout
+            Thread.currentThread().interrupt();
+            return RespWriter.nullArray();
+        }
     }
 
     private byte[] lpop(String[] command) {

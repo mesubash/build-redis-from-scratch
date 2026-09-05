@@ -34,6 +34,13 @@ public class RedisStore {
             throw new WrongTypeException();
         }
 
+        RedisSortedSet asSortedSet(){
+            if (value instanceof RedisSortedSet sorted){
+                return sorted;
+            }
+            throw new WrongTypeException();
+        }
+
         @SuppressWarnings("unchecked")
         Map<String, String> asHash(){
             if (value instanceof Map<?, ?> map){
@@ -151,6 +158,7 @@ public class RedisStore {
         }
         return switch (entry.value()) {
             case RedisStream ignored -> "stream";
+            case RedisSortedSet ignored -> "zset";
             case Map<?, ?> ignored -> "hash";
             case Set<?> ignored -> "set";
             case List<?> ignored -> "list";
@@ -636,6 +644,89 @@ public class RedisStore {
             return existing;
         });
         return copy[0];
+    }
+
+    // returns how many members were new rather than rescored
+    public long zadd(String key, List<String> scoreMemberPairs) {
+        long now = clock.getAsLong();
+        long[] added = new long[1];
+
+        data.compute(key, (k, existing) -> {
+            boolean usable = existing != null && !existing.isExpired(now);
+            RedisSortedSet sorted = usable ? existing.asSortedSet() : new RedisSortedSet();
+
+            for (int i = 0; i < scoreMemberPairs.size(); i += 2) {
+                double score = Double.parseDouble(scoreMemberPairs.get(i));
+                if (sorted.add(scoreMemberPairs.get(i + 1), score)) {
+                    added[0]++;
+                }
+            }
+
+            long expiry = usable ? existing.expiresAtNanos() : NEVER;
+            return new Entry(sorted, expiry);
+        });
+
+        touch(key);
+        return added[0];
+    }
+
+    public long zrem(String key, String... members) {
+        long now = clock.getAsLong();
+        long[] removed = new long[1];
+
+        data.computeIfPresent(key, (k, existing) -> {
+            if (existing.isExpired(now)) {
+                return null;
+            }
+            RedisSortedSet sorted = existing.asSortedSet();
+            for (String member : members) {
+                if (sorted.remove(member)) {
+                    removed[0]++;
+                }
+            }
+            return sorted.isEmpty() ? null : existing;
+        });
+
+        if (removed[0] > 0) {
+            touch(key);
+        }
+        return removed[0];
+    }
+
+    public Double zscore(String key, String member) {
+        Double[] score = new Double[1];
+        withSortedSet(key, sorted -> score[0] = sorted.score(member));
+        return score[0];
+    }
+
+    public Long zrank(String key, String member) {
+        Long[] rank = new Long[1];
+        withSortedSet(key, sorted -> rank[0] = sorted.rank(member));
+        return rank[0];
+    }
+
+    public long zcard(String key) {
+        long[] size = new long[1];
+        withSortedSet(key, sorted -> size[0] = sorted.size());
+        return size[0];
+    }
+
+    public List<String> zrange(String key, long start, long stop) {
+        List<String> members = new ArrayList<>();
+        withSortedSet(key, sorted -> members.addAll(sorted.range(start, stop)));
+        return members;
+    }
+
+    // reads happen inside compute so a writer can't mutate the set mid-scan
+    private void withSortedSet(String key, java.util.function.Consumer<RedisSortedSet> reader) {
+        long now = clock.getAsLong();
+        data.computeIfPresent(key, (k, existing) -> {
+            if (existing.isExpired(now)) {
+                return null;
+            }
+            reader.accept(existing.asSortedSet());
+            return existing;
+        });
     }
 
     // returns the id actually used. throws IllegalArgumentException with redis's own wording

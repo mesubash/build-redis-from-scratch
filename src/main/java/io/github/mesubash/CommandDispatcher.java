@@ -20,6 +20,7 @@ public class CommandDispatcher {
             "XADD", "XRANGE", "XLEN", "XREAD",
             "HSET", "HGET", "HGETALL", "HDEL", "HEXISTS", "HLEN", "HKEYS", "HVALS",
             "SADD", "SREM", "SMEMBERS", "SISMEMBER", "SCARD",
+            "ZADD", "ZREM", "ZSCORE", "ZRANK", "ZCARD", "ZRANGE",
             "CONFIG", "INFO", "DBSIZE", "FLUSHALL", "COMMAND",
             "TTL", "PTTL", "EXPIRE", "PEXPIRE", "PERSIST",
             "MGET", "MSET", "SETNX", "APPEND", "STRLEN", "GETDEL");
@@ -117,6 +118,12 @@ public class CommandDispatcher {
                 case "SMEMBERS" -> encodeStrings(store.smembers(argument(command, "smembers")));
                 case "SCARD" -> RespWriter.integer(store.scard(argument(command, "scard")));
                 case "SISMEMBER" -> sismember(command);
+                case "ZADD" -> zadd(command);
+                case "ZREM" -> zrem(command);
+                case "ZSCORE" -> zscore(command);
+                case "ZRANK" -> zrank(command);
+                case "ZCARD" -> RespWriter.integer(store.zcard(argument(command, "zcard")));
+                case "ZRANGE" -> zrange(command);
                 case "CONFIG" -> config(command);
                 case "INFO" -> info(command);
                 case "DBSIZE" -> RespWriter.integer(store.keys("*").size());
@@ -497,6 +504,83 @@ public class CommandDispatcher {
             return RespWriter.error("ERR wrong number of arguments for 'sismember' command");
         }
         return RespWriter.integer(store.sismember(command[1], command[2]) ? 1 : 0);
+    }
+
+    // redis prints whole scores without a decimal point, so 1.0 comes back as "1"
+    private static String formatScore(double score) {
+        if (score == Math.rint(score) && !Double.isInfinite(score)) {
+            return Long.toString((long) score);
+        }
+        return Double.toString(score);
+    }
+
+    private byte[] zadd(String[] command) {
+        // key plus at least one score/member pair
+        if (command.length < 4 || command.length % 2 != 0) {
+            return RespWriter.error("ERR wrong number of arguments for 'zadd' command");
+        }
+
+        List<String> pairs = Arrays.asList(Arrays.copyOfRange(command, 2, command.length));
+        try {
+            return RespWriter.integer(store.zadd(command[1], pairs));
+        } catch (NumberFormatException e) {
+            return RespWriter.error("ERR value is not a valid float");
+        }
+    }
+
+    private byte[] zrem(String[] command) {
+        if (command.length < 3) {
+            return RespWriter.error("ERR wrong number of arguments for 'zrem' command");
+        }
+        return RespWriter.integer(
+                store.zrem(command[1], Arrays.copyOfRange(command, 2, command.length)));
+    }
+
+    private byte[] zscore(String[] command) {
+        if (command.length != 3) {
+            return RespWriter.error("ERR wrong number of arguments for 'zscore' command");
+        }
+        Double score = store.zscore(command[1], command[2]);
+        return RespWriter.bulkString(score == null ? null : formatScore(score));
+    }
+
+    private byte[] zrank(String[] command) {
+        if (command.length != 3) {
+            return RespWriter.error("ERR wrong number of arguments for 'zrank' command");
+        }
+        Long rank = store.zrank(command[1], command[2]);
+        // a missing member is nil, not zero - rank 0 is a real answer
+        return rank == null ? RespWriter.bulkString(null) : RespWriter.integer(rank);
+    }
+
+    private byte[] zrange(String[] command) {
+        boolean withScores = command.length == 5 && command[4].equalsIgnoreCase("WITHSCORES");
+        if (command.length != 4 && !withScores) {
+            return RespWriter.error("ERR wrong number of arguments for 'zrange' command");
+        }
+
+        long start;
+        long stop;
+        try {
+            start = Long.parseLong(command[2]);
+            stop = Long.parseLong(command[3]);
+        } catch (NumberFormatException e) {
+            return RespWriter.error("ERR value is not an integer or out of range");
+        }
+
+        List<String> members = store.zrange(command[1], start, stop);
+        if (!withScores) {
+            return encodeStrings(members);
+        }
+
+        // WITHSCORES interleaves member, score, member, score
+        List<byte[]> encoded = new ArrayList<>();
+        for (String member : members) {
+            Double score = store.zscore(command[1], member);
+            encoded.add(RespWriter.bulkString(member));
+            encoded.add(RespWriter.bulkString(score == null ? null : formatScore(score)));
+        }
+        return RespWriter.array(encoded.toArray(new byte[0][]));
     }
 
     private byte[] xadd(String[] command) {

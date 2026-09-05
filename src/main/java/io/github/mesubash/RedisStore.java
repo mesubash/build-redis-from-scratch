@@ -52,6 +52,17 @@ public class RedisStore {
     // sleep. per-key monitors if a real workload ever makes the herd measurable
     private final Object listMonitor = new Object();
 
+    // bumped on every write, so WATCH can tell whether a key changed under it
+    private final Map<String, Long> versions = new ConcurrentHashMap<>();
+
+    public long version(String key) {
+        return versions.getOrDefault(key, 0L);
+    }
+
+    private void touch(String key) {
+        versions.merge(key, 1L, Long::sum);
+    }
+
     public RedisStore() {
         this(System::nanoTime);
     }
@@ -63,10 +74,12 @@ public class RedisStore {
 
     public void set(String key, String value) {
         data.put(key, new Entry(value, NEVER));
+        touch(key);
     }
 
     public void set(String key, String value, long ttlMillis) {
         data.put(key, new Entry(value, expiryFrom(ttlMillis)));
+        touch(key);
     }
 
     //the only place expiry is decided - every command goes through this
@@ -90,6 +103,9 @@ public class RedisStore {
         boolean existed = exists(key);
 
         data.remove(key);
+        if (existed) {
+            touch(key);
+        }
         return existed;
     }
 
@@ -131,6 +147,9 @@ public class RedisStore {
             applied[0] = true;
             return new Entry(existing.value(), expiryFrom(ttlMillis));
         });
+        if (applied[0]) {
+            touch(key);
+        }
         return applied[0];
     }
 
@@ -149,6 +168,9 @@ public class RedisStore {
             removed[0] = true;
             return new Entry(existing.value(), NEVER);
         });
+        if (removed[0]) {
+            touch(key);
+        }
         return removed[0];
     }
 
@@ -164,6 +186,9 @@ public class RedisStore {
             stored[0] = true;
             return new Entry(value, NEVER);
         });
+        if (stored[0]) {
+            touch(key);
+        }
         return stored[0];
     }
 
@@ -180,6 +205,7 @@ public class RedisStore {
             long expiry = usable ? existing.expiresAtNanos() : NEVER;
             return new Entry(combined, expiry);
         });
+        touch(key);
         return length[0];
     }
 
@@ -195,10 +221,17 @@ public class RedisStore {
             value[0] = existing.asString();
             return null;
         });
+        if (value[0] != null) {
+            touch(key);
+        }
         return value[0];
     }
 
     public void clear() {
+        // every watched key has effectively changed
+        for (String key : data.keySet()) {
+            touch(key);
+        }
         data.clear();
     }
 
@@ -246,6 +279,7 @@ public class RedisStore {
             long expiry = usable ? existing.expiresAtNanos() : NEVER;
             return new Entry(Long.toString(result[0]), expiry);
         });
+        touch(key);
         return result[0];
     }
 
@@ -270,6 +304,7 @@ public class RedisStore {
             long expiry = usable ? existing.expiresAtNanos() : NEVER;
             return new Entry(list, expiry);
         });
+        touch(key);
 
         // a blocked BLPOP is waiting for exactly this
         synchronized (listMonitor) {
@@ -388,6 +423,9 @@ public class RedisStore {
             //redis has no empty lists, the key goes away with the last element
             return list.isEmpty() ? null : existing;
         });
+        if (popped[0] != null) {
+            touch(key);
+        }
         return popped[0];
     }
 
@@ -417,6 +455,7 @@ public class RedisStore {
             return new Entry(stream, expiry);
         });
 
+        touch(key);
         return assigned[0];
     }
 

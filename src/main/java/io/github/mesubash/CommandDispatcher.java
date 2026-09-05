@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 
 // turns a parsed command into RESP reply. Knows nothing about sockets.
@@ -14,7 +15,7 @@ public class CommandDispatcher {
             "PING", "ECHO", "SET", "GET", "EXISTS", "DEL", "TYPE", "KEYS",
             "INCR", "DECR", "INCRBY", "DECRBY",
             "RPUSH", "LPUSH", "LRANGE", "LLEN", "LPOP", "RPOP", "LINDEX", "BLPOP",
-            "MULTI", "EXEC", "DISCARD",
+            "MULTI", "EXEC", "DISCARD", "WATCH", "UNWATCH",
             "SUBSCRIBE", "UNSUBSCRIBE", "PUBLISH",
             "XADD", "XRANGE", "XLEN", "XREAD",
             "CONFIG", "INFO", "DBSIZE", "FLUSHALL", "COMMAND",
@@ -56,7 +57,9 @@ public class CommandDispatcher {
         //command names are case-insensitive, arguments never are
         String name = command[0].toUpperCase(Locale.ROOT);
 
-        if (session.inTransaction() && !name.equals("EXEC") && !name.equals("DISCARD")) {
+        // WATCH is rejected rather than queued, so it has to reach the switch
+        if (session.inTransaction()
+                && !name.equals("EXEC") && !name.equals("DISCARD") && !name.equals("WATCH")) {
             return queueForLater(name, command, session);
         }
 
@@ -90,6 +93,8 @@ public class CommandDispatcher {
                 case "MULTI" -> multi(command, session);
                 case "EXEC" -> exec(command, session);
                 case "DISCARD" -> discard(command, session);
+                case "WATCH" -> watch(command, session);
+                case "UNWATCH" -> unwatch(command, session);
                 case "SUBSCRIBE" -> subscribe(command, session);
                 case "UNSUBSCRIBE" -> unsubscribe(command, session);
                 case "PUBLISH" -> publish(command);
@@ -599,6 +604,15 @@ public class CommandDispatcher {
             return RespWriter.error("EXECABORT Transaction discarded because of previous errors.");
         }
 
+        // optimistic locking: if anything we watched moved, the whole transaction is off
+        for (Map.Entry<String, Long> watched : session.watched().entrySet()) {
+            if (store.version(watched.getKey()) != watched.getValue()) {
+                session.reset();
+                return RespWriter.nullArray();
+            }
+        }
+
+        session.watched().clear();
         List<String[]> commands = session.drain();
         byte[][] replies = new byte[commands.size()][];
         for (int i = 0; i < commands.size(); i++) {
@@ -606,6 +620,29 @@ public class CommandDispatcher {
             replies[i] = execute(commands.get(i), session);
         }
         return RespWriter.array(replies);
+    }
+
+    // WATCH records what a key looks like now, EXEC checks it hasn't moved since
+    private byte[] watch(String[] command, ClientSession session) {
+        if (command.length < 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'watch' command");
+        }
+        if (session.inTransaction()) {
+            return RespWriter.error("ERR WATCH inside MULTI is not allowed");
+        }
+
+        for (int i = 1; i < command.length; i++) {
+            session.watched().put(command[i], store.version(command[i]));
+        }
+        return RespWriter.simpleString("OK");
+    }
+
+    private byte[] unwatch(String[] command, ClientSession session) {
+        if (command.length != 1) {
+            return RespWriter.error("ERR wrong number of arguments for 'unwatch' command");
+        }
+        session.watched().clear();
+        return RespWriter.simpleString("OK");
     }
 
     private byte[] discard(String[] command, ClientSession session) {

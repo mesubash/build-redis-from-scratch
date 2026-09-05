@@ -4,8 +4,10 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 // Per-connection state. Everything else in the server is shared, this is not.
@@ -16,6 +18,9 @@ public class ClientSession {
     private final List<String[]> queued = new ArrayList<>();
 
     private final Set<String> subscriptions = new LinkedHashSet<>();
+
+    // key to the version it had when WATCH was called
+    private final Map<String, Long> watched = new LinkedHashMap<>();
     private final OutputStream out;
 
     public ClientSession(OutputStream out) {
@@ -70,9 +75,15 @@ public class ClientSession {
         return commands;
     }
 
+    public Map<String, Long> watched() {
+        return watched;
+    }
+
+    // EXEC and DISCARD both end the watch, whether or not they ran anything
     public void reset() {
         inTransaction = false;
         aborted = false;
         queued.clear();
+        watched.clear();
     }
 }

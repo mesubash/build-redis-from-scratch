@@ -24,11 +24,13 @@ $ redis-cli ttl name
 **Strings** `SET` (with `EX`/`PX`) · `GET` · `MGET` · `MSET` · `SETNX` · `APPEND` · `STRLEN` ·
 `GETDEL` · `INCR` · `DECR` · `INCRBY` · `DECRBY`
 
-**Keys** `EXISTS` · `DEL` · `TYPE` · `KEYS` · `TTL` · `PTTL` · `EXPIRE` · `PEXPIRE` · `PERSIST`
+**Keys** `EXISTS` · `DEL` · `TYPE` · `KEYS` · `SCAN` · `TTL` · `PTTL` · `EXPIRE` · `PEXPIRE` · `PERSIST`
 
 **Hashes** `HSET` · `HGET` · `HGETALL` · `HDEL` · `HEXISTS` · `HLEN` · `HKEYS` · `HVALS`
 
 **Sets** `SADD` · `SREM` · `SMEMBERS` · `SISMEMBER` · `SCARD`
+
+**Sorted sets** `ZADD` · `ZREM` · `ZSCORE` · `ZRANK` · `ZCARD` · `ZRANGE` (with `WITHSCORES`)
 
 **Lists** `RPUSH` · `LPUSH` · `LRANGE` · `LLEN` · `LPOP` · `RPOP` · `LINDEX` · `BLPOP`
 
@@ -68,6 +70,7 @@ RespParser ──────► String[]  ──────► CommandDispatch
 | `ClientSession` | per-connection state: transactions, subscriptions, the write lock |
 | `PubSub` | channel registry |
 | `RedisStream` / `StreamId` / `StreamEntry` | the stream type |
+| `RedisSortedSet` | score index plus ordering, for sorted sets |
 | `ServerConfig` | command line options, `CONFIG GET` |
 
 Two boundaries carry the design: nothing outside `RespParser`/`RespWriter` touches `\r\n`, and
@@ -79,15 +82,18 @@ nothing outside `RedisStore` decides whether a key has expired.
 mvn test
 ```
 
-236 tests. The ones worth reading are the concurrency cases in `RedisStoreTest` — concurrent
+264 tests. The ones worth reading are the concurrency cases in `RedisStoreTest` — concurrent
 `INCR` and `RPUSH` that fail against a read-then-write implementation and pass against
 `compute()` — and `WatchTest.everyMutatingCommandInvalidatesAWatch`, which catches a new write
 command forgetting to bump the version counter.
 
 ## Not implemented
 
-RDB persistence, replication, consumer groups, `SCAN`, sorted sets, `CONFIG SET`.
-Every one of them is a known gap rather than an oversight.
+RDB persistence, replication, consumer groups, `CONFIG SET`, and set algebra
+(`SINTER`/`SUNION`/`SDIFF`). Every one is a known gap rather than an oversight.
+
+`SCAN` uses a sorted index as its cursor rather than redis's reverse-binary bucket walk — the
+interface is right, the algorithm is a simplification, and it is marked as one in the code.
 
 ## Requirements
 

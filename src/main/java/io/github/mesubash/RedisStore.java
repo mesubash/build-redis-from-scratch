@@ -106,6 +106,98 @@ public class RedisStore {
         return entry.value() instanceof List ? "list" : "string";
     }
 
+    // -2 when the key is gone, -1 when it has no ttl, otherwise milliseconds left
+    public long ttlMillis(String key) {
+        Entry entry = live(key);
+        if (entry == null) {
+            return -2;
+        }
+        if (entry.expiresAtNanos() == NEVER) {
+            return -1;
+        }
+        long remaining = entry.expiresAtNanos() - clock.getAsLong();
+        return Math.max(0, remaining / 1_000_000L);
+    }
+
+    // false when the key doesn't exist. keeps the value, replaces the deadline
+    public boolean expire(String key, long ttlMillis) {
+        long now = clock.getAsLong();
+        boolean[] applied = new boolean[1];
+
+        data.computeIfPresent(key, (k, existing) -> {
+            if (existing.isExpired(now)) {
+                return null;
+            }
+            applied[0] = true;
+            return new Entry(existing.value(), expiryFrom(ttlMillis));
+        });
+        return applied[0];
+    }
+
+    // true only if there was a ttl to remove
+    public boolean persist(String key) {
+        long now = clock.getAsLong();
+        boolean[] removed = new boolean[1];
+
+        data.computeIfPresent(key, (k, existing) -> {
+            if (existing.isExpired(now)) {
+                return null;
+            }
+            if (existing.expiresAtNanos() == NEVER) {
+                return existing;
+            }
+            removed[0] = true;
+            return new Entry(existing.value(), NEVER);
+        });
+        return removed[0];
+    }
+
+    // set only if absent, the atomic version of a check followed by a write
+    public boolean setIfAbsent(String key, String value) {
+        long now = clock.getAsLong();
+        boolean[] stored = new boolean[1];
+
+        data.compute(key, (k, existing) -> {
+            if (existing != null && !existing.isExpired(now)) {
+                return existing;
+            }
+            stored[0] = true;
+            return new Entry(value, NEVER);
+        });
+        return stored[0];
+    }
+
+    // returns the new length
+    public long append(String key, String suffix) {
+        long now = clock.getAsLong();
+        long[] length = new long[1];
+
+        data.compute(key, (k, existing) -> {
+            boolean usable = existing != null && !existing.isExpired(now);
+            String combined = usable ? existing.asString() + suffix : suffix;
+            length[0] = combined.length();
+
+            long expiry = usable ? existing.expiresAtNanos() : NEVER;
+            return new Entry(combined, expiry);
+        });
+        return length[0];
+    }
+
+    // read and delete in one atomic step
+    public String getDelete(String key) {
+        long now = clock.getAsLong();
+        String[] value = new String[1];
+
+        data.computeIfPresent(key, (k, existing) -> {
+            if (existing.isExpired(now)) {
+                return null;
+            }
+            value[0] = existing.asString();
+            return null;
+        });
+        return value[0];
+    }
+
     public void clear() {
         data.clear();
     }

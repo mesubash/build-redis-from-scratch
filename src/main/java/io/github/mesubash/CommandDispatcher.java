@@ -17,7 +17,9 @@ public class CommandDispatcher {
             "MULTI", "EXEC", "DISCARD",
             "SUBSCRIBE", "UNSUBSCRIBE", "PUBLISH",
             "XADD", "XRANGE", "XLEN", "XREAD",
-            "CONFIG", "INFO", "DBSIZE", "FLUSHALL", "COMMAND");
+            "CONFIG", "INFO", "DBSIZE", "FLUSHALL", "COMMAND",
+            "TTL", "PTTL", "EXPIRE", "PEXPIRE", "PERSIST",
+            "MGET", "MSET", "SETNX", "APPEND", "STRLEN", "GETDEL");
 
     // once subscribed a connection may only do these
     private static final Set<String> SUBSCRIBED_MODE_COMMANDS =
@@ -99,6 +101,17 @@ public class CommandDispatcher {
                 case "FLUSHALL" -> flushall(command);
                 // redis-cli sends this on connect, an empty array keeps it happy
                 case "COMMAND" -> RespWriter.array();
+                case "TTL" -> ttl(command, 1000);
+                case "PTTL" -> ttl(command, 1);
+                case "EXPIRE" -> expire(command, 1000, "expire");
+                case "PEXPIRE" -> expire(command, 1, "pexpire");
+                case "PERSIST" -> persist(command);
+                case "MGET" -> mget(command);
+                case "MSET" -> mset(command);
+                case "SETNX" -> setnx(command);
+                case "APPEND" -> append(command);
+                case "STRLEN" -> strlen(command);
+                case "GETDEL" -> getdel(command);
                 default ->  RespWriter.error("ERR unknown command '" + command[0] + "'");
             };
         }catch (WrongTypeException e){
@@ -248,6 +261,100 @@ public class CommandDispatcher {
             return RespWriter.error("ERR wrong number of arguments for 'llen' command");
         }
         return RespWriter.integer(store.llen(command[1]));
+    }
+
+    // TTL reports seconds, PTTL milliseconds, both using the same -2/-1 sentinels
+    private byte[] ttl(String[] command, long divisor) {
+        String name = divisor == 1 ? "pttl" : "ttl";
+        if (command.length != 2) {
+            return RespWriter.error("ERR wrong number of arguments for '" + name + "' command");
+        }
+
+        long millis = store.ttlMillis(command[1]);
+        if (millis < 0) {
+            return RespWriter.integer(millis);
+        }
+        return RespWriter.integer(millis / divisor);
+    }
+
+    private byte[] expire(String[] command, long multiplier, String name) {
+        if (command.length != 3) {
+            return RespWriter.error("ERR wrong number of arguments for '" + name + "' command");
+        }
+
+        long amount;
+        try {
+            amount = Long.parseLong(command[2]);
+        } catch (NumberFormatException e) {
+            return RespWriter.error("ERR value is not an integer or out of range");
+        }
+
+        return RespWriter.integer(store.expire(command[1], amount * multiplier) ? 1 : 0);
+    }
+
+    private byte[] persist(String[] command) {
+        if (command.length != 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'persist' command");
+        }
+        return RespWriter.integer(store.persist(command[1]) ? 1 : 0);
+    }
+
+    private byte[] mget(String[] command) {
+        if (command.length < 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'mget' command");
+        }
+
+        byte[][] values = new byte[command.length - 1][];
+        for (int i = 1; i < command.length; i++) {
+            String value;
+            try {
+                value = store.get(command[i]);
+            } catch (WrongTypeException e) {
+                // MGET never fails, a wrong-typed key just reads as nil
+                value = null;
+            }
+            values[i - 1] = RespWriter.bulkString(value);
+        }
+        return RespWriter.array(values);
+    }
+
+    private byte[] mset(String[] command) {
+        if (command.length < 3 || command.length % 2 != 1) {
+            return RespWriter.error("ERR wrong number of arguments for 'mset' command");
+        }
+        for (int i = 1; i < command.length; i += 2) {
+            store.set(command[i], command[i + 1]);
+        }
+        return RespWriter.simpleString("OK");
+    }
+
+    private byte[] setnx(String[] command) {
+        if (command.length != 3) {
+            return RespWriter.error("ERR wrong number of arguments for 'setnx' command");
+        }
+        return RespWriter.integer(store.setIfAbsent(command[1], command[2]) ? 1 : 0);
+    }
+
+    private byte[] append(String[] command) {
+        if (command.length != 3) {
+            return RespWriter.error("ERR wrong number of arguments for 'append' command");
+        }
+        return RespWriter.integer(store.append(command[1], command[2]));
+    }
+
+    private byte[] strlen(String[] command) {
+        if (command.length != 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'strlen' command");
+        }
+        String value = store.get(command[1]);
+        return RespWriter.integer(value == null ? 0 : value.length());
+    }
+
+    private byte[] getdel(String[] command) {
+        if (command.length != 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'getdel' command");
+        }
+        return RespWriter.bulkString(store.getDelete(command[1]));
     }
 
     private byte[] config(String[] command) {

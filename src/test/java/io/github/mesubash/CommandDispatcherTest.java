@@ -203,4 +203,60 @@ public class CommandDispatcherTest {
         reply("SET", "k", "v", "PX", "10000");
         assertEquals("$1\r\nv\r\n", reply("GET", "k"));
     }
+
+    @Test
+    void existsCountsKeysThatExist() {
+        reply("SET", "name", "Subash");
+        reply("SET", "city", "Kathmandu");
+        assertEquals(":1\r\n", reply("EXISTS", "name"));
+        assertEquals(":2\r\n", reply("EXISTS", "name", "city", "missing"));
+        assertEquals(":0\r\n", reply("EXISTS", "missing"));
+    }
+
+    @Test
+    void existsCountsDuplicateArguments() {
+        reply("SET", "k", "v");
+        assertEquals(":2\r\n", reply("EXISTS", "k", "k"));
+    }
+
+    @Test
+    void delReturnsHowManyWereRemoved() {
+        reply("SET", "name", "Subash");
+        assertEquals(":1\r\n", reply("DEL", "name", "missing"));
+        assertEquals("$-1\r\n", reply("GET", "name"));
+    }
+
+    @Test
+    void delDoesNotDoubleCountTheSameKey() {
+        reply("SET", "k", "v");
+        assertEquals(":1\r\n", reply("DEL", "k", "k"));
+    }
+
+    @Test
+    void typeReturnsStringOrNone() {
+        reply("SET", "k", "v");
+        assertEquals("+string\r\n", reply("TYPE", "k"));
+        assertEquals("+none\r\n", reply("TYPE", "missing"));
+    }
+
+    @Test
+    void keysReturnsAnArrayOfBulkStrings() {
+        reply("SET", "only", "v");
+        assertEquals("*1\r\n$4\r\nonly\r\n", reply("KEYS", "*"));
+    }
+
+    @Test
+    void keysOnEmptyStoreReturnsEmptyArray() {
+        assertEquals("*0\r\n", reply("KEYS", "*"));
+    }
+
+    @Test
+    void inspectionCommandsRejectWrongArity() {
+        assertEquals("-ERR wrong number of arguments for 'exists' command\r\n", reply("EXISTS"));
+        assertEquals("-ERR wrong number of arguments for 'del' command\r\n", reply("DEL"));
+        assertEquals("-ERR wrong number of arguments for 'type' command\r\n", reply("TYPE"));
+        assertEquals("-ERR wrong number of arguments for 'type' command\r\n", reply("TYPE", "a", "b"));
+        assertEquals("-ERR wrong number of arguments for 'keys' command\r\n", reply("KEYS"));
+        assertEquals("-ERR wrong number of arguments for 'keys' command\r\n", reply("KEYS", "a", "b"));
+    }
 }

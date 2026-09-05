@@ -2,8 +2,14 @@ package io.github.mesubash;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RedisStoreTest {
 
@@ -96,5 +102,85 @@ class RedisStoreTest {
         store.set("k", "v", Long.MAX_VALUE / 1_000_000);
         now = millis(5000);
         assertEquals("v", store.get("k"));
+    }
+
+    @Test
+    void existsReflectsPresence() {
+        store.set("k", "v");
+        assertTrue(store.exists("k"));
+        assertFalse(store.exists("missing"));
+    }
+
+    @Test
+    void existsIgnoresExpiredKeys() {
+        store.set("k", "v", 100);
+        now = millis(200);
+        assertFalse(store.exists("k"));
+    }
+
+    @Test
+    void deleteReportsWhetherItRemovedSomething() {
+        store.set("k", "v");
+        assertTrue(store.delete("k"));
+        assertFalse(store.delete("k"));
+        assertNull(store.get("k"));
+    }
+
+    @Test
+    void deleteDoesNotCountAnExpiredKey() {
+        store.set("k", "v", 100);
+        now = millis(200);
+        assertFalse(store.delete("k"));
+    }
+
+    @Test
+    void typeIsStringOrNone() {
+        store.set("k", "v");
+        assertEquals("string", store.type("k"));
+        assertEquals("none", store.type("missing"));
+    }
+
+    @Test
+    void typeIgnoresExpiredKeys() {
+        store.set("k", "v", 100);
+        now = millis(200);
+        assertEquals("none", store.type("k"));
+    }
+
+    @Test
+    void keysListsEverything() {
+        store.set("name", "Subash");
+        store.set("city", "Kathmandu");
+        assertEquals(Set.of("name", "city"), new HashSet<>(store.keys("*")));
+    }
+
+    @Test
+    void keysOnEmptyStoreIsEmpty() {
+        assertEquals(List.of(), store.keys("*"));
+    }
+
+    @Test
+    void keysFiltersByPattern() {
+        store.set("user:1", "a");
+        store.set("user:2", "b");
+        store.set("city", "c");
+        assertEquals(Set.of("user:1", "user:2"), new HashSet<>(store.keys("user:*")));
+        assertEquals(Set.of("user:1", "user:2"), new HashSet<>(store.keys("user:?")));
+    }
+
+    @Test
+    void keysExcludesExpiredKeys() {
+        store.set("permanent", "v");
+        store.set("temp", "v", 100);
+        now = millis(200);
+        assertEquals(List.of("permanent"), store.keys("*"));
+    }
+
+    @Test
+    void keysPatternDoesNotTreatDotAsWildcard() {
+        // Pattern.quote means a literal dot only matches a dot
+        store.set("a.b", "v");
+        store.set("axb", "v");
+        assertEquals(List.of("a.b"), store.keys("a.b"));
     }
 }

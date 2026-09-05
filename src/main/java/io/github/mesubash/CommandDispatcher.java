@@ -1,6 +1,7 @@
 package io.github.mesubash;
 
 
+import java.util.List;
 import java.util.Locale;
 
 // turns a parsed command into RESP reply. Knows nothing about sockets.
@@ -25,6 +26,10 @@ public class CommandDispatcher {
             case "ECHO" -> echo(command);
             case "SET" -> set(command);
             case "GET" -> get(command);
+            case "EXISTS" -> exists(command);
+            case "DEL" -> del(command);
+            case "TYPE" -> type(command);
+            case "KEYS" -> keys(command);
             default ->  RespWriter.error("ERR unknown command '" + command[0] + "'");
         };
     }
@@ -84,6 +89,56 @@ public class CommandDispatcher {
         }
         //bulkString turns a null into $-1 for us
         return RespWriter.bulkString(store.get(command[1]));
+    }
+
+    private byte[] exists(String[] command) {
+        if (command.length < 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'exists' command");
+        }
+
+        long count = 0;
+
+        // duplicates count more than once, that's real redis behavior
+        for ( int i = 1; i < command.length; i++ ) {
+            if ( store.exists(command[i]) ) {
+                count++;
+            }
+        }
+        return RespWriter.integer(count);
+    }
+
+    private byte[] del(String[] command) {
+        if (command.length < 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'del' command");
+        }
+        long removed =  0;
+        for ( int i = 1; i < command.length; i++ ) {
+            if (store.delete(command[i]) ) {
+                removed++;
+            }
+
+        }
+        return RespWriter.integer(removed);
+    }
+
+    private byte[] type(String[] command) {
+        if (command.length != 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'type' command");
+        }
+        return RespWriter.simpleString(store.type(command[1]));
+    }
+
+    private byte[] keys(String[] command) {
+        if (command.length != 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'keys' command");
+        }
+        List<String> matches = store.keys(command[1]);
+        byte[][] encoded = new byte[matches.size()][];
+
+        for ( int i = 0; i < matches.size(); i++) {
+            encoded[i] = RespWriter.bulkString(matches.get(i));
+        }
+        return RespWriter.array(encoded);
     }
 
 }

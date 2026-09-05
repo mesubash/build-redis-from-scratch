@@ -1,9 +1,12 @@
 package io.github.mesubash;
 
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
+import java.util.regex.Pattern;
 
 // shared key-value state. one instance per server, used by every client thread
 public class RedisStore {
@@ -40,13 +43,59 @@ public class RedisStore {
         data.put(key, new Entry(value, expiryFrom(ttlMillis)));
     }
 
+    //the only place expiry is decided - every command goes through this
+    private Entry live(String key) {
+        long now = clock.getAsLong();
+        return data.computeIfPresent(key, (k, e)-> e.isExpired(now) ? null : e);
+    }
+
     // null means the key is absent - the map refuses to store nulls, so there is no ambiguity
     public String get(String key) {
-        long now = clock.getAsLong();
-
-        // returning null from the remapping function removes the key , atomically for this key
-        Entry entry = data.computeIfPresent(key, (k, e) -> e.isExpired(now) ? null : e);
+        Entry entry = live(key);
         return entry == null ? null : entry.value();
+    }
+
+    public boolean exists(String key) {
+        return live(key) != null;
+    }
+
+    // true only if a live key was removed, so an expired key doesn't inflate DEL's count
+    public boolean delete(String key) {
+        boolean existed = exists(key);
+
+        data.remove(key);
+        return existed;
+    }
+
+    // everything is a string until lists arrive
+    public String type(String key) {
+        return exists(key) ? "string" : "none";
+    }
+
+    // snapshot, weakly consistent - deliberately not locking the whole map
+    public List<String> keys(String pattern) {
+        Pattern regex = globToRegex(pattern);
+        List<String> matches = new ArrayList<>();
+
+        for (String key : data.keySet()){
+            if (regex.matcher(key).matches() && exists(key)) {
+                matches.add(key);
+            }
+        }
+        return matches;
+
+    }
+
+    private static Pattern globToRegex(String glob) {
+        StringBuilder regex = new StringBuilder();
+        for (char c : glob.toCharArray()) {
+            switch (c) {
+                case '*' -> regex.append(".*");
+                case '?' -> regex.append(".");
+                default -> regex.append(Pattern.quote(String.valueOf(c)));
+            }
+        }
+        return Pattern.compile(regex.toString(), Pattern.DOTALL);
     }
 
     private long expiryFrom(long ttlMillis) {

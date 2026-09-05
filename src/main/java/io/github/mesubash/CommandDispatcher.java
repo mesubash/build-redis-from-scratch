@@ -1,6 +1,8 @@
 package io.github.mesubash;
 
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -21,7 +23,7 @@ public class CommandDispatcher {
             "HSET", "HGET", "HGETALL", "HDEL", "HEXISTS", "HLEN", "HKEYS", "HVALS",
             "SADD", "SREM", "SMEMBERS", "SISMEMBER", "SCARD",
             "ZADD", "ZREM", "ZSCORE", "ZRANK", "ZCARD", "ZRANGE",
-            "CONFIG", "INFO", "DBSIZE", "FLUSHALL", "COMMAND", "SCAN",
+            "CONFIG", "INFO", "DBSIZE", "FLUSHALL", "COMMAND", "SCAN", "SAVE", "BGSAVE",
             "TTL", "PTTL", "EXPIRE", "PEXPIRE", "PERSIST",
             "MGET", "MSET", "SETNX", "APPEND", "STRLEN", "GETDEL");
 
@@ -131,6 +133,8 @@ public class CommandDispatcher {
                 // redis-cli sends this on connect, an empty array keeps it happy
                 case "COMMAND" -> RespWriter.array();
                 case "SCAN" -> scan(command);
+                case "SAVE" -> save(command, false);
+                case "BGSAVE" -> save(command, true);
                 case "TTL" -> ttl(command, 1000);
                 case "PTTL" -> ttl(command, 1);
                 case "EXPIRE" -> expire(command, 1000, "expire");
@@ -388,6 +392,37 @@ public class CommandDispatcher {
             return RespWriter.error("ERR wrong number of arguments for 'getdel' command");
         }
         return RespWriter.bulkString(store.getDelete(command[1]));
+    }
+
+    private byte[] save(String[] command, boolean background) {
+        String name = background ? "bgsave" : "save";
+        if (command.length != 1) {
+            return RespWriter.error("ERR wrong number of arguments for '" + name + "' command");
+        }
+
+        Path file = Path.of(config.get("dir"), config.get("dbfilename"));
+        List<RdbReader.Record> records = store.snapshotStrings();
+
+        if (background) {
+            // the snapshot is taken now, only the write is deferred
+            Thread.ofVirtual().start(() -> writeQuietly(file, records));
+            return RespWriter.simpleString("Background saving started");
+        }
+
+        try {
+            RdbWriter.write(file, records);
+        } catch (IOException e) {
+            return RespWriter.error("ERR " + e.getMessage());
+        }
+        return RespWriter.simpleString("OK");
+    }
+
+    private static void writeQuietly(Path file, List<RdbReader.Record> records) {
+        try {
+            RdbWriter.write(file, records);
+        } catch (IOException e) {
+            System.err.println("Background save failed: " + e.getMessage());
+        }
     }
 
     // SCAN cursor [MATCH pattern] [COUNT n]

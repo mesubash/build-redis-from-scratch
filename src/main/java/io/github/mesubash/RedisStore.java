@@ -295,6 +295,30 @@ public class RedisStore {
         set(key, value, remaining);
     }
 
+    // string keys only, with deadlines converted back to absolute wall-clock instants.
+    // ponytail: lists, hashes, sets, zsets and streams are skipped - writing those needs
+    // redis's listpack and quicklist encodings, which is a stage of its own
+    public List<RdbReader.Record> snapshotStrings() {
+        List<RdbReader.Record> records = new ArrayList<>();
+
+        for (String key : keys("*")) {
+            String value;
+            try {
+                value = get(key);
+            } catch (WrongTypeException e) {
+                continue;
+            }
+            if (value == null) {
+                continue;
+            }
+
+            long remaining = ttlMillis(key);
+            long expiresAt = remaining < 0 ? 0 : System.currentTimeMillis() + remaining;
+            records.add(new RdbReader.Record(key, value, expiresAt));
+        }
+        return records;
+    }
+
     // a page of keys plus the cursor to continue from, 0 meaning the scan is finished
     public record ScanPage(long nextCursor, List<String> keys) {
     }

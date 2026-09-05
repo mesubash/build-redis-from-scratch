@@ -18,6 +18,8 @@ public class CommandDispatcher {
             "MULTI", "EXEC", "DISCARD", "WATCH", "UNWATCH",
             "SUBSCRIBE", "UNSUBSCRIBE", "PUBLISH",
             "XADD", "XRANGE", "XLEN", "XREAD",
+            "HSET", "HGET", "HGETALL", "HDEL", "HEXISTS", "HLEN", "HKEYS", "HVALS",
+            "SADD", "SREM", "SMEMBERS", "SISMEMBER", "SCARD",
             "CONFIG", "INFO", "DBSIZE", "FLUSHALL", "COMMAND",
             "TTL", "PTTL", "EXPIRE", "PEXPIRE", "PERSIST",
             "MGET", "MSET", "SETNX", "APPEND", "STRLEN", "GETDEL");
@@ -102,6 +104,19 @@ public class CommandDispatcher {
                 case "XRANGE" -> xrange(command);
                 case "XLEN" -> xlen(command);
                 case "XREAD" -> xread(command);
+                case "HSET" -> hset(command);
+                case "HGET" -> hget(command);
+                case "HGETALL" -> encodeStrings(store.hgetall(argument(command, "hgetall")));
+                case "HKEYS" -> encodeStrings(store.hkeys(argument(command, "hkeys")));
+                case "HVALS" -> encodeStrings(store.hvals(argument(command, "hvals")));
+                case "HLEN" -> RespWriter.integer(store.hlen(argument(command, "hlen")));
+                case "HDEL" -> hdel(command);
+                case "HEXISTS" -> hexists(command);
+                case "SADD" -> sadd(command);
+                case "SREM" -> srem(command);
+                case "SMEMBERS" -> encodeStrings(store.smembers(argument(command, "smembers")));
+                case "SCARD" -> RespWriter.integer(store.scard(argument(command, "scard")));
+                case "SISMEMBER" -> sismember(command);
                 case "CONFIG" -> config(command);
                 case "INFO" -> info(command);
                 case "DBSIZE" -> RespWriter.integer(store.keys("*").size());
@@ -123,6 +138,8 @@ public class CommandDispatcher {
             };
         }catch (WrongTypeException e){
             return RespWriter.error("WRONGTYPE Operation against a key holding the wrong kind of value");
+        }catch (ArityException e){
+            return RespWriter.error("ERR wrong number of arguments for '" + e.getMessage() + "' command");
         }
     }
 
@@ -410,6 +427,76 @@ public class CommandDispatcher {
         }
         store.clear();
         return RespWriter.simpleString("OK");
+    }
+
+    // the single-key commands all look the same, so they share the arity check
+    private static String argument(String[] command, String name) {
+        if (command.length != 2) {
+            throw new ArityException(name);
+        }
+        return command[1];
+    }
+
+    private static byte[] encodeStrings(List<String> values) {
+        byte[][] encoded = new byte[values.size()][];
+        for (int i = 0; i < values.size(); i++) {
+            encoded[i] = RespWriter.bulkString(values.get(i));
+        }
+        return RespWriter.array(encoded);
+    }
+
+    private byte[] hset(String[] command) {
+        // key plus at least one field/value pair
+        if (command.length < 4 || command.length % 2 != 0) {
+            return RespWriter.error("ERR wrong number of arguments for 'hset' command");
+        }
+        List<String> pairs = Arrays.asList(Arrays.copyOfRange(command, 2, command.length));
+        return RespWriter.integer(store.hset(command[1], pairs));
+    }
+
+    private byte[] hget(String[] command) {
+        if (command.length != 3) {
+            return RespWriter.error("ERR wrong number of arguments for 'hget' command");
+        }
+        return RespWriter.bulkString(store.hget(command[1], command[2]));
+    }
+
+    private byte[] hdel(String[] command) {
+        if (command.length < 3) {
+            return RespWriter.error("ERR wrong number of arguments for 'hdel' command");
+        }
+        return RespWriter.integer(
+                store.hdel(command[1], Arrays.copyOfRange(command, 2, command.length)));
+    }
+
+    private byte[] hexists(String[] command) {
+        if (command.length != 3) {
+            return RespWriter.error("ERR wrong number of arguments for 'hexists' command");
+        }
+        return RespWriter.integer(store.hexists(command[1], command[2]) ? 1 : 0);
+    }
+
+    private byte[] sadd(String[] command) {
+        if (command.length < 3) {
+            return RespWriter.error("ERR wrong number of arguments for 'sadd' command");
+        }
+        return RespWriter.integer(
+                store.sadd(command[1], Arrays.copyOfRange(command, 2, command.length)));
+    }
+
+    private byte[] srem(String[] command) {
+        if (command.length < 3) {
+            return RespWriter.error("ERR wrong number of arguments for 'srem' command");
+        }
+        return RespWriter.integer(
+                store.srem(command[1], Arrays.copyOfRange(command, 2, command.length)));
+    }
+
+    private byte[] sismember(String[] command) {
+        if (command.length != 3) {
+            return RespWriter.error("ERR wrong number of arguments for 'sismember' command");
+        }
+        return RespWriter.integer(store.sismember(command[1], command[2]) ? 1 : 0);
     }
 
     private byte[] xadd(String[] command) {

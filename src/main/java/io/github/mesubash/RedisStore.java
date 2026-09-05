@@ -2,8 +2,11 @@ package io.github.mesubash;
 
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.LongSupplier;
 import java.util.regex.Pattern;
@@ -27,6 +30,22 @@ public class RedisStore {
         RedisStream asStream(){
             if (value instanceof RedisStream stream){
                 return stream;
+            }
+            throw new WrongTypeException();
+        }
+
+        @SuppressWarnings("unchecked")
+        Map<String, String> asHash(){
+            if (value instanceof Map<?, ?> map){
+                return (Map<String, String>) map;
+            }
+            throw new WrongTypeException();
+        }
+
+        @SuppressWarnings("unchecked")
+        Set<String> asSet(){
+            if (value instanceof Set<?> set){
+                return (Set<String>) set;
             }
             throw new WrongTypeException();
         }
@@ -130,10 +149,13 @@ public class RedisStore {
         if (entry == null) {
             return "none";
         }
-        if (entry.value() instanceof RedisStream) {
-            return "stream";
-        }
-        return entry.value() instanceof List ? "list" : "string";
+        return switch (entry.value()) {
+            case RedisStream ignored -> "stream";
+            case Map<?, ?> ignored -> "hash";
+            case Set<?> ignored -> "set";
+            case List<?> ignored -> "list";
+            default -> "string";
+        };
     }
 
     // -2 when the key is gone, -1 when it has no ttl, otherwise milliseconds left
@@ -439,6 +461,181 @@ public class RedisStore {
             touch(key);
         }
         return popped[0];
+    }
+
+    // returns how many fields were new rather than overwritten
+    public long hset(String key, List<String> fieldValuePairs) {
+        long now = clock.getAsLong();
+        long[] added = new long[1];
+
+        data.compute(key, (k, existing) -> {
+            boolean usable = existing != null && !existing.isExpired(now);
+            Map<String, String> hash = usable ? existing.asHash() : new LinkedHashMap<>();
+
+            for (int i = 0; i < fieldValuePairs.size(); i += 2) {
+                if (hash.put(fieldValuePairs.get(i), fieldValuePairs.get(i + 1)) == null) {
+                    added[0]++;
+                }
+            }
+
+            long expiry = usable ? existing.expiresAtNanos() : NEVER;
+            return new Entry(hash, expiry);
+        });
+
+        touch(key);
+        return added[0];
+    }
+
+    public String hget(String key, String field) {
+        Map<String, String> hash = readHash(key);
+        return hash == null ? null : hash.get(field);
+    }
+
+    // flat [field, value, field, value] so the dispatcher can encode it directly
+    public List<String> hgetall(String key) {
+        Map<String, String> hash = readHash(key);
+        if (hash == null) {
+            return List.of();
+        }
+        List<String> flat = new ArrayList<>();
+        hash.forEach((field, value) -> {
+            flat.add(field);
+            flat.add(value);
+        });
+        return flat;
+    }
+
+    public List<String> hkeys(String key) {
+        Map<String, String> hash = readHash(key);
+        return hash == null ? List.of() : new ArrayList<>(hash.keySet());
+    }
+
+    public List<String> hvals(String key) {
+        Map<String, String> hash = readHash(key);
+        return hash == null ? List.of() : new ArrayList<>(hash.values());
+    }
+
+    public long hlen(String key) {
+        Map<String, String> hash = readHash(key);
+        return hash == null ? 0 : hash.size();
+    }
+
+    public boolean hexists(String key, String field) {
+        Map<String, String> hash = readHash(key);
+        return hash != null && hash.containsKey(field);
+    }
+
+    public long hdel(String key, String... fields) {
+        long now = clock.getAsLong();
+        long[] removed = new long[1];
+
+        data.computeIfPresent(key, (k, existing) -> {
+            if (existing.isExpired(now)) {
+                return null;
+            }
+            Map<String, String> hash = existing.asHash();
+            for (String field : fields) {
+                if (hash.remove(field) != null) {
+                    removed[0]++;
+                }
+            }
+            // an empty hash is no hash at all
+            return hash.isEmpty() ? null : existing;
+        });
+
+        if (removed[0] > 0) {
+            touch(key);
+        }
+        return removed[0];
+    }
+
+    // a copy taken inside compute, so callers never hold the live map
+    private Map<String, String> readHash(String key) {
+        long now = clock.getAsLong();
+        Map<String, String>[] copy = new Map[1];
+
+        data.computeIfPresent(key, (k, existing) -> {
+            if (existing.isExpired(now)) {
+                return null;
+            }
+            copy[0] = new LinkedHashMap<>(existing.asHash());
+            return existing;
+        });
+        return copy[0];
+    }
+
+    public long sadd(String key, String... members) {
+        long now = clock.getAsLong();
+        long[] added = new long[1];
+
+        data.compute(key, (k, existing) -> {
+            boolean usable = existing != null && !existing.isExpired(now);
+            Set<String> set = usable ? existing.asSet() : new LinkedHashSet<>();
+
+            for (String member : members) {
+                if (set.add(member)) {
+                    added[0]++;
+                }
+            }
+
+            long expiry = usable ? existing.expiresAtNanos() : NEVER;
+            return new Entry(set, expiry);
+        });
+
+        touch(key);
+        return added[0];
+    }
+
+    public long srem(String key, String... members) {
+        long now = clock.getAsLong();
+        long[] removed = new long[1];
+
+        data.computeIfPresent(key, (k, existing) -> {
+            if (existing.isExpired(now)) {
+                return null;
+            }
+            Set<String> set = existing.asSet();
+            for (String member : members) {
+                if (set.remove(member)) {
+                    removed[0]++;
+                }
+            }
+            return set.isEmpty() ? null : existing;
+        });
+
+        if (removed[0] > 0) {
+            touch(key);
+        }
+        return removed[0];
+    }
+
+    public List<String> smembers(String key) {
+        Set<String> set = readSet(key);
+        return set == null ? List.of() : new ArrayList<>(set);
+    }
+
+    public boolean sismember(String key, String member) {
+        Set<String> set = readSet(key);
+        return set != null && set.contains(member);
+    }
+
+    public long scard(String key) {
+        Set<String> set = readSet(key);
+        return set == null ? 0 : set.size();
+    }
+
+    private Set<String> readSet(String key) {
+        long now = clock.getAsLong();
+        Set<String>[] copy = new Set[1];
+
+        data.computeIfPresent(key, (k, existing) -> {
+            if (existing.isExpired(now)) {
+                return null;
+            }
+            copy[0] = new LinkedHashSet<>(existing.asSet());
+            return existing;
+        });
+        return copy[0];
     }
 
     // returns the id actually used. throws IllegalArgumentException with redis's own wording

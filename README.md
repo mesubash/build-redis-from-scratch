@@ -26,11 +26,15 @@ $ redis-cli ttl name
 
 **Keys** `EXISTS` · `DEL` · `TYPE` · `KEYS` · `TTL` · `PTTL` · `EXPIRE` · `PEXPIRE` · `PERSIST`
 
+**Hashes** `HSET` · `HGET` · `HGETALL` · `HDEL` · `HEXISTS` · `HLEN` · `HKEYS` · `HVALS`
+
+**Sets** `SADD` · `SREM` · `SMEMBERS` · `SISMEMBER` · `SCARD`
+
 **Lists** `RPUSH` · `LPUSH` · `LRANGE` · `LLEN` · `LPOP` · `RPOP` · `LINDEX` · `BLPOP`
 
-**Streams** `XADD` · `XRANGE` · `XLEN` · `XREAD`
+**Streams** `XADD` · `XRANGE` · `XLEN` · `XREAD` (with `BLOCK`)
 
-**Transactions** `MULTI` · `EXEC` · `DISCARD`
+**Transactions** `MULTI` · `EXEC` · `DISCARD` · `WATCH` · `UNWATCH`
 
 **Pub/Sub** `SUBSCRIBE` · `UNSUBSCRIBE` · `PUBLISH`
 
@@ -64,6 +68,7 @@ RespParser ──────► String[]  ──────► CommandDispatch
 | `ClientSession` | per-connection state: transactions, subscriptions, the write lock |
 | `PubSub` | channel registry |
 | `RedisStream` / `StreamId` / `StreamEntry` | the stream type |
+| `ServerConfig` | command line options, `CONFIG GET` |
 
 Two boundaries carry the design: nothing outside `RespParser`/`RespWriter` touches `\r\n`, and
 nothing outside `RedisStore` decides whether a key has expired.
@@ -74,13 +79,14 @@ nothing outside `RedisStore` decides whether a key has expired.
 mvn test
 ```
 
-204 tests. The ones worth reading are the concurrency cases in `RedisStoreTest` — concurrent
+236 tests. The ones worth reading are the concurrency cases in `RedisStoreTest` — concurrent
 `INCR` and `RPUSH` that fail against a read-then-write implementation and pass against
-`compute()`.
+`compute()` — and `WatchTest.everyMutatingCommandInvalidatesAWatch`, which catches a new write
+command forgetting to bump the version counter.
 
 ## Not implemented
 
-RDB persistence, replication, `WATCH`, consumer groups, `SCAN`, hashes, sets, sorted sets.
+RDB persistence, replication, consumer groups, `SCAN`, sorted sets, `CONFIG SET`.
 Every one of them is a known gap rather than an oversight.
 
 ## Requirements

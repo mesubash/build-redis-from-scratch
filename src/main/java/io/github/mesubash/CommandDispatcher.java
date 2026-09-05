@@ -13,12 +13,23 @@ public class CommandDispatcher {
             "PING", "ECHO", "SET", "GET", "EXISTS", "DEL", "TYPE", "KEYS",
             "INCR", "DECR", "INCRBY", "DECRBY",
             "RPUSH", "LPUSH", "LRANGE", "LLEN", "LPOP", "BLPOP",
-            "MULTI", "EXEC", "DISCARD");
+            "MULTI", "EXEC", "DISCARD",
+            "SUBSCRIBE", "UNSUBSCRIBE", "PUBLISH");
+
+    // once subscribed a connection may only do these
+    private static final Set<String> SUBSCRIBED_MODE_COMMANDS =
+            Set.of("SUBSCRIBE", "UNSUBSCRIBE", "PING", "QUIT", "RESET");
 
     private final RedisStore store;
+    private final PubSub pubSub = new PubSub();
 
     public CommandDispatcher(RedisStore store) {
         this.store = store;
+    }
+
+    // the connection loop tells us when a client is gone
+    public void onDisconnect(ClientSession session) {
+        pubSub.removeAll(session);
     }
 
     // tests and any caller that doesn't care about transactions
@@ -36,6 +47,11 @@ public class CommandDispatcher {
 
         if (session.inTransaction() && !name.equals("EXEC") && !name.equals("DISCARD")) {
             return queueForLater(name, command, session);
+        }
+
+        if (session.isSubscribed() && !SUBSCRIBED_MODE_COMMANDS.contains(name)) {
+            return RespWriter.error("ERR Can't execute '" + command[0].toLowerCase(Locale.ROOT)
+                    + "': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT / RESET are allowed in this context");
         }
 
         try {
@@ -61,6 +77,9 @@ public class CommandDispatcher {
                 case "MULTI" -> multi(command, session);
                 case "EXEC" -> exec(command, session);
                 case "DISCARD" -> discard(command, session);
+                case "SUBSCRIBE" -> subscribe(command, session);
+                case "UNSUBSCRIBE" -> unsubscribe(command, session);
+                case "PUBLISH" -> publish(command);
                 default ->  RespWriter.error("ERR unknown command '" + command[0] + "'");
             };
         }catch (WrongTypeException e){
@@ -210,6 +229,69 @@ public class CommandDispatcher {
             return RespWriter.error("ERR wrong number of arguments for 'llen' command");
         }
         return RespWriter.integer(store.llen(command[1]));
+    }
+
+    // one confirmation array per channel, each carrying the running subscription count
+    private byte[] subscribe(String[] command, ClientSession session) {
+        if (command.length < 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'subscribe' command");
+        }
+
+        byte[][] confirmations = new byte[command.length - 1][];
+        for (int i = 1; i < command.length; i++) {
+            int count = pubSub.subscribe(session, command[i]);
+            confirmations[i - 1] = RespWriter.array(
+                    RespWriter.bulkString("subscribe"),
+                    RespWriter.bulkString(command[i]),
+                    RespWriter.integer(count));
+        }
+        return concat(confirmations);
+    }
+
+    private byte[] unsubscribe(String[] command, ClientSession session) {
+        String[] channels = command.length > 1
+                ? Arrays.copyOfRange(command, 1, command.length)
+                // bare UNSUBSCRIBE leaves every channel
+                : session.subscriptions().toArray(new String[0]);
+
+        if (channels.length == 0) {
+            return RespWriter.array(
+                    RespWriter.bulkString("unsubscribe"),
+                    RespWriter.bulkString(null),
+                    RespWriter.integer(0));
+        }
+
+        byte[][] confirmations = new byte[channels.length][];
+        for (int i = 0; i < channels.length; i++) {
+            int count = pubSub.unsubscribe(session, channels[i]);
+            confirmations[i] = RespWriter.array(
+                    RespWriter.bulkString("unsubscribe"),
+                    RespWriter.bulkString(channels[i]),
+                    RespWriter.integer(count));
+        }
+        return concat(confirmations);
+    }
+
+    private byte[] publish(String[] command) {
+        if (command.length != 3) {
+            return RespWriter.error("ERR wrong number of arguments for 'publish' command");
+        }
+        return RespWriter.integer(pubSub.publish(command[1], command[2]));
+    }
+
+    // several replies to one command, so they can't go through RespWriter.array
+    private static byte[] concat(byte[][] parts) {
+        int size = 0;
+        for (byte[] part : parts) {
+            size += part.length;
+        }
+        byte[] joined = new byte[size];
+        int at = 0;
+        for (byte[] part : parts) {
+            System.arraycopy(part, 0, joined, at, part.length);
+            at += part.length;
+        }
+        return joined;
     }
 
     // inside MULTI nothing runs, it just piles up until EXEC

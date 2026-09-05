@@ -41,6 +41,9 @@ public class Main {
 
     private static void handleClient(Socket clientSocket, CommandDispatcher dispatcher){
 
+        // declared out here so the disconnect cleanup can still see it after a failure
+        ClientSession session = null;
+
         //try-with-resources so this worker owns closing its own socket
         try ( Socket socket = clientSocket ){
             InputStream inputStream = socket.getInputStream();
@@ -51,8 +54,8 @@ public class Main {
             // the parser owns the pending bytes now
             RespParser parser = new RespParser();
 
-            // transactions are per connection, unlike the store
-            ClientSession session = new ClientSession();
+            // transactions and subscriptions are per connection, unlike the store
+            session = new ClientSession(outputStream);
 
             while ((bytesRead = inputStream.read(buffer)) != -1) {
                 parser.append(buffer, bytesRead);
@@ -60,8 +63,8 @@ public class Main {
                 // one read may hold several commands, or none
                 String[] command;
                 while ((command = parser.next()) != null) {
-                    outputStream.write(dispatcher.execute(command, session));
-                    outputStream.flush();
+                    // session.send serialises against publishers writing to this same socket
+                    session.send(dispatcher.execute(command, session));
                 }
             }
 
@@ -72,6 +75,9 @@ public class Main {
         }catch (IllegalStateException e){
             // the byte stream is broken, nothing after this can be trusted
             System.err.println("Protocol error, closing connection: " + e.getMessage());
+        }
+        if (session != null) {
+            dispatcher.onDisconnect(session);
         }
         System.out.println("Client disconnected");
     }

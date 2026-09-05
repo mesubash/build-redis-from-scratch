@@ -8,16 +8,58 @@ Updated as the codebase moves. Last checked against the working tree on 2026-09-
 
 | | |
 |---|---|
-| Commands | 67 |
+| Commands | 73 of Redis 8.2's 267, so 27 percent |
 | Data types | strings, lists, hashes, sets, sorted sets, streams |
 | Tests | 295, all passing |
 | Source | roughly 2,500 lines, 18 classes |
 | Dependencies | JUnit, test scope only |
 | Interoperability | `redis-cli` works unmodified. `redis-server` reads and writes our RDB files |
 
-Real Redis has roughly 240 commands. Counting commands, this is about a quarter of it. Counting the
-mechanisms that make Redis work, it is most of them, because the remaining commands are mostly new
-names over machinery that already exists here.
+## Coverage, measured
+
+| Group | Built | In Redis 8.2 | Notable gaps |
+|---|---|---|---|
+| Transactions | 5 | 5 | none |
+| Strings | 12 | 22 | `GETEX` `GETRANGE` `GETSET` `INCRBYFLOAT` `LCS` `MSETNX` and 4 more |
+| Keys | 10 | 27 | `COPY` `DUMP` `EXPIREAT` `MIGRATE` `MOVE` `OBJECT` and 11 more |
+| Lists | 8 | 22 | `BLMOVE` `BLMPOP` `BRPOP` `LINSERT` `LMOVE` `LREM` and 8 more |
+| Hashes | 8 | 28 | `HINCRBY` `HMGET` `HRANDFIELD` `HSCAN` `HSETNX` `HSTRLEN` and 14 more |
+| Sets | 5 | 17 | `SDIFF` `SINTER` `SUNION` `SMISMEMBER` `SPOP` `SRANDMEMBER` and 6 more |
+| Sorted sets | 6 | 35 | `ZCOUNT` `ZINCRBY` `ZRANGEBYSCORE` `ZREVRANGE` `ZPOPMIN` `ZUNIONSTORE` and 23 more |
+| Streams | 4 | 17 | `XACK` `XAUTOCLAIM` `XCLAIM` `XDEL` `XGROUP` `XREADGROUP` and 7 more |
+| Pub/sub | 3 | 9 | `PSUBSCRIBE` `PUBSUB` `PUNSUBSCRIBE` `SPUBLISH` `SSUBSCRIBE` `SUNSUBSCRIBE` |
+| Replication | 3 | 8 | `FAILOVER` `REPLICAOF` `SLAVEOF` `SYNC` `WAITAOF` |
+| Persistence | 2 | 4 | `BGREWRITEAOF` `LASTSAVE` |
+| Scripting | 0 | 8 | `EVAL` `EVALSHA` `FCALL` `FUNCTION` `SCRIPT` and 3 more |
+| Cluster | 0 | 4 | `ASKING` `CLUSTER` `READONLY` `READWRITE` |
+| Server, admin, vector sets, other | 7 | 61 | `ACL` `CLIENT` `MEMORY` `OBJECT` `SLOWLOG` `VADD` and 48 more |
+| **Total** | **73** | **267** | **27 percent by count** |
+
+Measured, not estimated. `redis-cli -p 6501 command list` against redis-server 8.2.0 reports 267
+top-level commands. The comparison script is at the bottom of this page, so you can re-run it after
+adding a stage.
+
+### Reading that table honestly
+
+Two groups are finished. Transactions is complete at 5 of 5. Persistence is 2 of 4, and the two
+missing ones belong to AOF, which is not implemented at all.
+
+Three groups are thin for a reason. Sorted sets are 6 of 35 because most of the rest are variations
+on range queries: `ZRANGEBYSCORE`, `ZREVRANGE`, `ZRANGEBYLEX` and the `STORE` forms all reuse the
+ordering that `ZRANGE` already built. Hashes are 8 of 28 largely because Redis 7.4 added per-field
+expiry, an entire sub-feature. Streams are 4 of 17 because consumer groups are half that group.
+
+Two groups are zero, and they are the honest holes. Scripting needs an embedded Lua interpreter, and
+it is the only remaining item that would teach a genuinely new mechanism. Cluster is a distributed
+systems project that happens to share a name.
+
+The 61-command server group is mostly things a learning server has no reason to have: `ACL`,
+`CLIENT`, `SLOWLOG`, `LATENCY`, `MEMORY`, plus the vector set commands Redis 8 added for similarity
+search.
+
+So 27 percent by command count, and a much higher share of the ideas, because most of what is
+missing is a new name over machinery that already exists here. That is the claim this page exists to
+let you check rather than take on trust.
 
 ## Implemented
 
@@ -126,7 +168,26 @@ case `WATCH` exists for. That test is the only thing standing between you and th
 ## Checking the current state
 
 ```bash
-mvn test                                    # 295 tests
-grep -rn 'ponytail:' src/                   # every deliberate shortcut
-grep -oE 'case "[A-Z]+"' src/main/java/*/*/*/CommandDispatcher.java | sort -u | wc -l
+mvn test                       # 295 tests
+grep -rn 'ponytail:' src/      # every deliberate shortcut
+```
+
+### Re-measuring coverage after a stage
+
+```bash
+# 1. what real redis has
+redis-server --port 6501 --save '' &
+redis-cli -p 6501 command list | grep -v '|' | sort -u > /tmp/real-commands.txt
+redis-cli -p 6501 command count
+redis-cli -p 6501 shutdown nosave
+
+# 2. what we have, minus the option tokens that share the switch
+grep -ohE 'case "[A-Z]+"' src/main/java/*/*/*/CommandDispatcher.java \
+  | sed 's/case "//;s/"//' | tr 'A-Z' 'a-z' | sort -u \
+  | grep -vxE 'count|ex|match|px' > /tmp/our-commands.txt
+
+# 3. the numbers
+comm -12 /tmp/our-commands.txt /tmp/real-commands.txt | wc -l   # built
+wc -l < /tmp/real-commands.txt                                  # total
+comm -13 /tmp/our-commands.txt /tmp/real-commands.txt           # everything left
 ```

@@ -13,10 +13,25 @@ public class RedisStore {
 
     private static final long NEVER = Long.MAX_VALUE;
 
-    private record Entry(String value, long expiresAtNanos) {
+    private record Entry(Object value, long expiresAtNanos) {
         boolean isExpired(long now) {
             return now >= expiresAtNanos;
         }
+        String asString(){
+            if (value instanceof String s){
+                return s;
+            }
+            throw new WrongTypeException();
+        }
+
+        @SuppressWarnings("unchecked")
+        List<String> asList(){
+            if (value instanceof List<?> list){
+                return (List<String>) list;
+            }
+            throw new WrongTypeException();
+        }
+
     }
 
     //ConcurrentHashMap over a synchronized map: unrelated keys don't contend,
@@ -52,7 +67,7 @@ public class RedisStore {
     // null means the key is absent - the map refuses to store nulls, so there is no ambiguity
     public String get(String key) {
         Entry entry = live(key);
-        return entry == null ? null : entry.value();
+        return entry == null ? null : entry.asString();
     }
 
     public boolean exists(String key) {
@@ -67,9 +82,14 @@ public class RedisStore {
         return existed;
     }
 
-    // everything is a string until lists arrive
+    // string or list, decided by what's stored
     public String type(String key) {
-        return exists(key) ? "string" : "none";
+        Entry entry = live(key);
+
+        if (entry == null) {
+            return "none";
+        }
+        return entry.value() instanceof List ? "list" : "string";
     }
 
     // snapshot, weakly consistent - deliberately not locking the whole map
@@ -98,9 +118,9 @@ public class RedisStore {
         return Pattern.compile(regex.toString(), Pattern.DOTALL);
     }
 
-    // read-modif-write must happen inside compute(), or concurrent increments get lost.
-    // throws NumberFormatExeception if the stored value isn't an interger,
-    // ArthmeticExceptoin on overflow
+    // read-modify-write must happen inside compute(), or concurrent increments get lost.
+    // throws NumberFormatException if the stored value isn't an integer,
+    // ArithmeticException on overflow
     public long increment(String key, long delta) {
         long now = clock.getAsLong();
         long[] result = new long[1];
@@ -109,7 +129,7 @@ public class RedisStore {
             //an expired key is a missing key, so start from 0 rather than the stale value
             boolean usable = existing != null && !existing.isExpired(now);
 
-            long current = usable ? Long.parseLong(existing.value()) : 0L;
+            long current = usable ? Long.parseLong(existing.asString()) : 0L;
             result[0] = Math.addExact(current, delta);
 
             // a live key keeps its ttl, incrementing must not make a counter immortal
@@ -117,6 +137,95 @@ public class RedisStore {
             return new Entry(Long.toString(result[0]), expiry);
         });
         return result[0];
+    }
+
+    // all list access happens inside compute(), the map protects the mapping, not the list
+    public long push(String key, boolean left, String... values){
+        long now = clock.getAsLong();
+        long[] length = new long[1];
+
+        data.compute(key, (k, existing) -> {
+            boolean usable = existing != null && !existing.isExpired(now);
+            List<String> list = usable ? existing.asList() : new ArrayList<>();
+
+            for ( String value : values ) {
+                if (left) {
+                    list.addFirst(value);
+                } else {
+                    list.addLast(value);
+                }
+            }
+
+            length[0] = list.size();
+            long expiry = usable ? existing.expiresAtNanos() : NEVER;
+            return new Entry(list, expiry);
+        });
+        return length[0];
+    }
+
+    public List<String> lrange(String key, long start, long stop){
+        long now = clock.getAsLong();
+        List<String> result = new ArrayList<>();
+
+        data.computeIfPresent(key, (k,existing) -> {
+            if (existing.isExpired(now)) {
+                return null;
+            }
+            List<String> list = existing.asList();
+
+            int size = list.size();
+            int from = normalise(start, size);
+            int to = normalise(stop, size);
+            if (to > size - 1){
+                to = size - 1;
+            }
+
+            // a copy, never a view onto the list that lives in the map
+            for (int i = from; i <= to; i++){
+                result.add(list.get(i));
+            }
+            return existing;
+
+        });
+        return result;
+    }
+
+    public long llen(String key) {
+        long now = clock.getAsLong();
+        long[] size = new long[1];
+
+        data.computeIfPresent(key, (k, existing) ->{
+            if (existing.isExpired(now)) {
+                return null;
+            }
+            size[0] = existing.asList().size();
+            return existing;
+        });
+        return size[0];
+    }
+
+    public String lpop(String key) {
+        long now = clock.getAsLong();
+        String[] popped = new String[1];
+
+        data.computeIfPresent(key, (k, existing) -> {
+            if (existing.isExpired(now)) {
+                return null;
+            }
+            List<String> list = existing.asList();
+            popped[0] = list.removeFirst();
+
+            //redis has no empty lists, the key goes away with the last element
+            return list.isEmpty() ? null : existing;
+        });
+        return popped[0];
+    }
+
+    //negative indices count from the end, then clamp to 0
+    private static int normalise( long index, int size ){
+        long resolved = index < 0 ? size + index : index;
+        if (resolved < 0) return 0;
+        return (int) Math.min(resolved, Integer.MAX_VALUE);
     }
 
     private long expiryFrom(long ttlMillis) {

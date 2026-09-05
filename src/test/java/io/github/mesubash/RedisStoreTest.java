@@ -263,4 +263,111 @@ class RedisStoreTest {
 
         assertEquals(Long.toString((long) threads * perThread), shared.get("counter"));
     }
+
+    @Test
+    void rpushAppendsAndReturnsLength() {
+        assertEquals(2, store.push("fruits", false, "apple", "banana"));
+        assertEquals(3, store.push("fruits", false, "cherry"));
+        assertEquals(List.of("apple", "banana", "cherry"), store.lrange("fruits", 0, -1));
+    }
+
+    @Test
+    void lpushPrependsSoMultipleArgumentsAreReversed() {
+        store.push("order", true, "a", "b", "c");
+        assertEquals(List.of("c", "b", "a"), store.lrange("order", 0, -1));
+    }
+
+    @Test
+    void lrangeHandlesNegativeAndOutOfRangeIndices() {
+        store.push("l", false, "a", "b", "c", "d", "e");
+        assertEquals(List.of("a", "b", "c", "d", "e"), store.lrange("l", 0, -1));
+        assertEquals(List.of("a", "b", "c"), store.lrange("l", 0, 2));
+        assertEquals(List.of("d", "e"), store.lrange("l", -2, -1));
+        assertEquals(List.of("a", "b", "c", "d", "e"), store.lrange("l", -100, 100));
+        assertEquals(List.of(), store.lrange("l", 3, 1));
+        assertEquals(List.of(), store.lrange("l", 10, 20));
+    }
+
+    @Test
+    void listCommandsOnMissingKeyAreEmpty() {
+        assertEquals(List.of(), store.lrange("missing", 0, -1));
+        assertEquals(0, store.llen("missing"));
+        assertNull(store.lpop("missing"));
+        assertFalse(store.exists("missing"));
+    }
+
+    @Test
+    void lpopTakesTheHead() {
+        store.push("l", false, "a", "b", "c");
+        assertEquals("a", store.lpop("l"));
+        assertEquals(List.of("b", "c"), store.lrange("l", 0, -1));
+    }
+
+    @Test
+    void lpopOfLastElementDeletesTheKey() {
+        store.push("solo", false, "only");
+        assertEquals("only", store.lpop("solo"));
+        assertFalse(store.exists("solo"));
+    }
+
+    @Test
+    void lrangeReturnsACopy() {
+        store.push("l", false, "a", "b");
+        List<String> range = store.lrange("l", 0, -1);
+        range.clear();
+        assertEquals(List.of("a", "b"), store.lrange("l", 0, -1));
+    }
+
+    @Test
+    void listCommandsRejectAStringKey() {
+        store.set("str", "hello");
+        assertThrows(WrongTypeException.class, () -> store.push("str", false, "x"));
+        assertThrows(WrongTypeException.class, () -> store.lrange("str", 0, -1));
+        assertThrows(WrongTypeException.class, () -> store.llen("str"));
+        assertThrows(WrongTypeException.class, () -> store.lpop("str"));
+    }
+
+    @Test
+    void stringCommandsRejectAListKey() {
+        store.push("l", false, "a");
+        assertThrows(WrongTypeException.class, () -> store.get("l"));
+        assertThrows(WrongTypeException.class, () -> store.increment("l", 1));
+    }
+
+    @Test
+    void typeReportsList() {
+        store.push("l", false, "a");
+        assertEquals("list", store.type("l"));
+    }
+
+    @Test
+    void listsRespectExpiry() {
+        store.push("l", false, "a");
+        store.set("l", "now a string", 100);
+        now = millis(200);
+        assertEquals(0, store.llen("l"));
+        assertEquals("none", store.type("l"));
+    }
+
+    @Test
+    void concurrentPushesLoseNothing() throws InterruptedException {
+        RedisStore shared = new RedisStore();
+        int threads = 4;
+        int perThread = 500;
+
+        Thread[] workers = new Thread[threads];
+        for (int t = 0; t < threads; t++) {
+            workers[t] = new Thread(() -> {
+                for (int i = 0; i < perThread; i++) {
+                    shared.push("l", false, "x");
+                }
+            });
+            workers[t].start();
+        }
+        for (Thread worker : workers) {
+            worker.join();
+        }
+
+        assertEquals((long) threads * perThread, shared.llen("l"));
+    }
 }

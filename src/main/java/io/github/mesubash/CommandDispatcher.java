@@ -1,6 +1,7 @@
 package io.github.mesubash;
 
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
@@ -21,21 +22,30 @@ public class CommandDispatcher {
         //command names are case-insensitive, arguments never are
         String name = command[0].toUpperCase(Locale.ROOT);
 
-        return switch (name) {
-            case "PING" -> ping(command);
-            case "ECHO" -> echo(command);
-            case "SET" -> set(command);
-            case "GET" -> get(command);
-            case "EXISTS" -> exists(command);
-            case "DEL" -> del(command);
-            case "TYPE" -> type(command);
-            case "KEYS" -> keys(command);
-            case "INCR" -> incrementBy(command, 1, "incr");
-            case "DECR" -> incrementBy(command, -1, "decr");
-            case "INCRBY" -> incrementByArgument(command, false);
-            case "DECRBY" -> incrementByArgument(command, true);
-            default ->  RespWriter.error("ERR unknown command '" + command[0] + "'");
-        };
+        try {
+            return switch (name) {
+                case "PING" -> ping(command);
+                case "ECHO" -> echo(command);
+                case "SET" -> set(command);
+                case "GET" -> get(command);
+                case "EXISTS" -> exists(command);
+                case "DEL" -> del(command);
+                case "TYPE" -> type(command);
+                case "KEYS" -> keys(command);
+                case "INCR" -> incrementBy(command, 1, "incr");
+                case "DECR" -> incrementBy(command, -1, "decr");
+                case "INCRBY" -> incrementByArgument(command, false);
+                case "DECRBY" -> incrementByArgument(command, true);
+                case "RPUSH" -> push(command, false);
+                case "LPUSH" -> push(command, true);
+                case "LRANGE" -> lrange(command);
+                case "LLEN" -> llen(command);
+                case "LPOP" -> lpop(command);
+                default ->  RespWriter.error("ERR unknown command '" + command[0] + "'");
+            };
+        }catch (WrongTypeException e){
+            return RespWriter.error("WRONGTYPE Operation against a key holding the wrong kind of value");
+        }
     }
 
     private byte[] ping(String[] command) {
@@ -144,6 +154,52 @@ public class CommandDispatcher {
         }
         return RespWriter.array(encoded);
     }
+
+    private byte[] push(String[] command, boolean left) {
+        String name = left ? "lpush" : "rpush";
+        if (command.length < 3) {
+            return RespWriter.error("ERR wrong number of arguments for '" + name +"' command");
+        }
+        String[] values = Arrays.copyOfRange(command, 2, command.length);
+        return RespWriter.integer(store.push(command[1], left, values));
+    }
+
+    private byte[] lrange(String[] command) {
+        if (command.length != 4) {
+            return RespWriter.error("ERR wrong number of arguments for 'lrange' command");
+        }
+
+        long start;
+        long stop;
+        try {
+            start = Long.parseLong(command[2]);
+            stop = Long.parseLong(command[3]);
+        } catch (NumberFormatException e) {
+            return RespWriter.error("ERR value is not an integer or out of range");
+        }
+        List<String> values = store.lrange(command[1], start, stop);
+        byte[][] encoded = new byte[values.size()][];
+        for (int i = 0; i < values.size(); i++) {
+            encoded[i] = RespWriter.bulkString(values.get(i));
+        }
+        return RespWriter.array(encoded);
+    }
+
+    private byte[] llen(String[] command) {
+        if (command.length != 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'llen' command");
+        }
+        return RespWriter.integer(store.llen(command[1]));
+    }
+
+    private byte[] lpop(String[] command) {
+        if (command.length != 2) {
+            return RespWriter.error("ERR wrong number of arguments for 'lpop' command");
+        }
+        return RespWriter.bulkString(store.lpop(command[1]));
+    }
+
+
 
     private byte[] incrementBy(String[] command, long delta, String name) {
         if ( command.length != 2){

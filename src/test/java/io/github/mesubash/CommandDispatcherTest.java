@@ -317,4 +317,57 @@ public class CommandDispatcherTest {
         assertEquals("-ERR wrong number of arguments for 'decrby' command\r\n",
                 reply("DECRBY", "k"));
     }
+
+    @Test
+    void listCommandsRoundTrip() {
+        assertEquals(":2\r\n", reply("RPUSH", "fruits", "apple", "banana"));
+        assertEquals(":3\r\n", reply("LPUSH", "fruits", "cherry"));
+        assertEquals("*3\r\n$6\r\ncherry\r\n$5\r\napple\r\n$6\r\nbanana\r\n",
+                reply("LRANGE", "fruits", "0", "-1"));
+        assertEquals(":3\r\n", reply("LLEN", "fruits"));
+        assertEquals("+list\r\n", reply("TYPE", "fruits"));
+        assertEquals("$6\r\ncherry\r\n", reply("LPOP", "fruits"));
+        assertEquals(":2\r\n", reply("LLEN", "fruits"));
+    }
+
+    @Test
+    void listCommandsOnMissingKey() {
+        assertEquals("*0\r\n", reply("LRANGE", "missing", "0", "-1"));
+        assertEquals(":0\r\n", reply("LLEN", "missing"));
+        assertEquals("$-1\r\n", reply("LPOP", "missing"));
+    }
+
+    @Test
+    void wrongTypeInBothDirections() {
+        String wrongType = "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n";
+
+        reply("SET", "str", "hello");
+        assertEquals(wrongType, reply("LPUSH", "str", "x"));
+        assertEquals(wrongType, reply("LRANGE", "str", "0", "-1"));
+
+        reply("RPUSH", "list", "a");
+        assertEquals(wrongType, reply("GET", "list"));
+        assertEquals(wrongType, reply("INCR", "list"));
+    }
+
+    @Test
+    void lrangeRejectsNonNumericIndices() {
+        assertEquals("-ERR value is not an integer or out of range\r\n",
+                reply("LRANGE", "k", "0", "abc"));
+    }
+
+    @Test
+    void listCommandsRejectWrongArity() {
+        assertEquals("-ERR wrong number of arguments for 'rpush' command\r\n", reply("RPUSH", "k"));
+        assertEquals("-ERR wrong number of arguments for 'lpush' command\r\n", reply("LPUSH", "k"));
+        assertEquals("-ERR wrong number of arguments for 'lrange' command\r\n",
+                reply("LRANGE", "k", "0"));
+        assertEquals("-ERR wrong number of arguments for 'llen' command\r\n", reply("LLEN"));
+        assertEquals("-ERR wrong number of arguments for 'lpop' command\r\n", reply("LPOP"));
+    }
+
+    @Test
+    void singleValuePushIsValid() {
+        assertEquals(":1\r\n", reply("RPUSH", "k", "one"));
+    }
 }

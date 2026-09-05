@@ -1,0 +1,41 @@
+name: Behaviour differs from real Redis
+description: This server answers differently than redis-server does
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The most useful report in this project. Behavioural fidelity is the whole point, so a
+        difference from real Redis is always worth knowing about.
+
+  - type: textarea
+    id: side-by-side
+    attributes:
+      label: Both servers, side by side
+      description: Run the same commands against this server and a real redis-server on another port.
+      placeholder: |
+        $ redis-cli -p 6399 ttl k     # this project
+        (integer) 4
+        $ redis-cli -p 6380 ttl k     # real redis
+        (integer) 5
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: redis-version
+    attributes:
+      label: Real Redis version
+      description: From `redis-cli info server | grep redis_version`
+      placeholder: 8.2.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: setup
+    attributes:
+      label: How to reproduce
+      description: The commands that set up the state, starting from an empty keyspace.
+      render: shell
+    validations:
+      required: true

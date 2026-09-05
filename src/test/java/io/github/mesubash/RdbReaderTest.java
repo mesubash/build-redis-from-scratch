@@ -181,8 +181,27 @@ class RdbReaderTest {
         }
 
         assertEquals("Subash", store.get("name"));
+
         // "soon" was written with a 100ms ttl and is long gone
         assertNull(store.get("soon"));
-        assertTrue(store.ttlMillis("later") > 0);
+
+        // nothing here may depend on how long ago the fixture was generated. "later" was written
+        // with a one hour ttl, so asserting it is still alive would make this test expire too
+    }
+
+    @Test
+    void restoringKeepsATtlThatIsStillInTheFuture() {
+        RedisStore store = new RedisStore();
+        long inOneMinute = System.currentTimeMillis() + 60_000;
+
+        store.restore("live", "value", inOneMinute);
+        store.restore("permanent", "value", 0);
+        store.restore("stale", "value", System.currentTimeMillis() - 1);
+
+        assertTrue(store.ttlMillis("live") > 55_000);
+        assertEquals(-1, store.ttlMillis("permanent"));
+
+        // -2 means absent, which is what an already-expired deadline must produce
+        assertEquals(-2, store.ttlMillis("stale"));
     }
 }

@@ -1,5 +1,9 @@
 # build-redis-from-scratch
 
+[![build](https://github.com/mesubash/build-redis-from-scratch/actions/workflows/ci.yml/badge.svg)](https://github.com/mesubash/build-redis-from-scratch/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+[![Java 21+](https://img.shields.io/badge/java-21%2B-orange.svg)](https://adoptium.net/)
+
 A Redis server written in Java from nothing — no Spring, no Netty, no Redis library. Plain
 sockets, a hand-written RESP parser, and `java.util.concurrent`.
 
@@ -122,4 +126,19 @@ interface is right, the algorithm is a simplification, and it is marked as one i
 
 ## Requirements
 
-JDK 21+ (built against 26), Maven. No dependencies outside JUnit for tests.
+JDK 21 or newer, and Maven. No dependencies outside JUnit, test scope only. CI builds on 21 and 25,
+and additionally checks that real `redis-cli` drives this server and that real `redis-server` loads
+an RDB file this server wrote.
+
+## Contributing
+
+Bug reports where this server disagrees with real Redis are the most valuable kind, because
+behavioural fidelity is the point. See [CONTRIBUTING.md](./CONTRIBUTING.md) for the process, and
+[ROADMAP.md](./ROADMAP.md) for what is missing.
+
+## License
+
+MIT. See [LICENSE](./LICENSE).
+
+This is a teaching project. It has no authentication, no TLS, and no memory limits, so do not run it
+on a public network or put real data in it. [SECURITY.md](./SECURITY.md) lists the known limits.

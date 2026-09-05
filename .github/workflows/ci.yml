@@ -1,0 +1,74 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 21 is the minimum the code targets, 25 is the current release
+        java: ['21', '25']
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.java }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.java }}
+          cache: maven
+
+      - name: Build and test
+        run: mvn -B clean test
+
+  interop:
+    # the tests prove the code agrees with itself. this proves it agrees with real redis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Install redis-cli and redis-server
+        run: sudo apt-get update && sudo apt-get install -y redis-tools redis-server
+
+      - name: Stop the distro redis so it does not hold the port
+        run: sudo systemctl stop redis-server || true
+
+      - name: Build
+        run: mvn -B -q clean compile
+
+      - name: Start our server
+        run: |
+          java -cp target/classes com.example.redis.Main --port 6399 --dir /tmp &
+          for i in $(seq 1 50); do redis-cli -p 6399 ping 2>/dev/null && break; sleep 0.2; done
+
+      - name: Real redis-cli speaks to our server
+        run: |
+          set -e
+          test "$(redis-cli -p 6399 ping)" = "PONG"
+          test "$(redis-cli -p 6399 set k v)" = "OK"
+          test "$(redis-cli -p 6399 get k)" = "v"
+          test "$(redis-cli -p 6399 incr n)" = "1"
+          redis-cli -p 6399 rpush l a b > /dev/null
+          test "$(redis-cli -p 6399 lrange l 0 -1 | tr '\n' ' ')" = "a b "
+          test "$(redis-cli -p 6399 type l)" = "list"
+
+      - name: Our RDB file loads in real redis-server
+        run: |
+          set -e
+          redis-cli -p 6399 save
+          redis-server --port 6402 --dir /tmp --dbfilename dump.rdb --daemonize yes
+          for i in $(seq 1 50); do redis-cli -p 6402 ping 2>/dev/null && break; sleep 0.2; done
+          test "$(redis-cli -p 6402 get k)" = "v"
+          redis-cli -p 6402 shutdown nosave || true

@@ -1,0 +1,36 @@
+name: New command or stage
+description: Propose a command or feature to build
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check [ROADMAP.md](../../ROADMAP.md) first. It lists what is missing, roughly what each
+        piece costs, and whether it teaches anything new.
+
+  - type: input
+    id: command
+    attributes:
+      label: Command or feature
+      placeholder: EVAL, or consumer groups
+    validations:
+      required: true
+
+  - type: textarea
+    id: teaches
+    attributes:
+      label: What would building it teach?
+      description: |
+        This is a learning project. A command that is a new name over machinery already here is
+        lower value than one that needs a mechanism the codebase does not have yet. Say which
+        this is.
+    validations:
+      required: true
+
+  - type: textarea
+    id: session
+    attributes:
+      label: The redis-cli session it should support
+      render: shell
+    validations:
+      required: true

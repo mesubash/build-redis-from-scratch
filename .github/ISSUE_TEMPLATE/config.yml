@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: The tutorial series
+    url: https://blog.subashsdhami.com.np
+    about: Thirteen posts building this server from an empty directory
+  - name: Roadmap and status
+    url: https://github.com/mesubash/build-redis-from-scratch/blob/main/ROADMAP.md
+    about: What is built, what is deliberately simplified, and what is left

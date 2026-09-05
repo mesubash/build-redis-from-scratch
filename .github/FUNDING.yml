@@ -1,0 +1,12 @@
+# Nepal is not a supported region for GitHub Sponsors, and PayPal and Stripe cannot receive
+# money here either, so most of the platforms below are unavailable regardless of the repo.
+#
+# Left commented on purpose. See the notes in CONTRIBUTING.md before enabling anything.
+#
+# github: [mesubash]          # unavailable in Nepal
+# ko_fi:                      # needs PayPal or Stripe, neither works in Nepal
+# liberapay:                  # same
+# polar:                      # Stripe only
+# buy_me_a_coffee:            # pays out via Payoneer, which does work in Nepal. verify first
+# open_collective:            # needs a fiscal host, payouts via Wise or PayPal
+# custom: ['https://blog.subashsdhami.com.np']

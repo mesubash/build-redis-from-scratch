@@ -4,9 +4,16 @@ package io.github.mesubash;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 // turns a parsed command into RESP reply. Knows nothing about sockets.
 public class CommandDispatcher {
+
+    private static final Set<String> KNOWN_COMMANDS = Set.of(
+            "PING", "ECHO", "SET", "GET", "EXISTS", "DEL", "TYPE", "KEYS",
+            "INCR", "DECR", "INCRBY", "DECRBY",
+            "RPUSH", "LPUSH", "LRANGE", "LLEN", "LPOP", "BLPOP",
+            "MULTI", "EXEC", "DISCARD");
 
     private final RedisStore store;
 
@@ -14,13 +21,22 @@ public class CommandDispatcher {
         this.store = store;
     }
 
+    // tests and any caller that doesn't care about transactions
     public byte[] execute(String[] command) {
+        return execute(command, new ClientSession());
+    }
+
+    public byte[] execute(String[] command, ClientSession session) {
         if (command.length == 0) {
             return RespWriter.error("ERR empty command");
         }
 
         //command names are case-insensitive, arguments never are
         String name = command[0].toUpperCase(Locale.ROOT);
+
+        if (session.inTransaction() && !name.equals("EXEC") && !name.equals("DISCARD")) {
+            return queueForLater(name, command, session);
+        }
 
         try {
             return switch (name) {
@@ -42,6 +58,9 @@ public class CommandDispatcher {
                 case "LLEN" -> llen(command);
                 case "LPOP" -> lpop(command);
                 case "BLPOP" -> blpop(command);
+                case "MULTI" -> multi(command, session);
+                case "EXEC" -> exec(command, session);
+                case "DISCARD" -> discard(command, session);
                 default ->  RespWriter.error("ERR unknown command '" + command[0] + "'");
             };
         }catch (WrongTypeException e){
@@ -191,6 +210,60 @@ public class CommandDispatcher {
             return RespWriter.error("ERR wrong number of arguments for 'llen' command");
         }
         return RespWriter.integer(store.llen(command[1]));
+    }
+
+    // inside MULTI nothing runs, it just piles up until EXEC
+    private byte[] queueForLater(String name, String[] command, ClientSession session) {
+        if (name.equals("MULTI")) {
+            return RespWriter.error("ERR MULTI calls can not be nested");
+        }
+        if (!KNOWN_COMMANDS.contains(name)) {
+            // redis refuses the whole transaction rather than skipping the bad command
+            session.abort();
+            return RespWriter.error("ERR unknown command '" + command[0] + "'");
+        }
+        session.queue(command);
+        return RespWriter.simpleString("QUEUED");
+    }
+
+    private byte[] multi(String[] command, ClientSession session) {
+        if (command.length != 1) {
+            return RespWriter.error("ERR wrong number of arguments for 'multi' command");
+        }
+        session.begin();
+        return RespWriter.simpleString("OK");
+    }
+
+    private byte[] exec(String[] command, ClientSession session) {
+        if (command.length != 1) {
+            return RespWriter.error("ERR wrong number of arguments for 'exec' command");
+        }
+        if (!session.inTransaction()) {
+            return RespWriter.error("ERR EXEC without MULTI");
+        }
+        if (session.aborted()) {
+            session.reset();
+            return RespWriter.error("EXECABORT Transaction discarded because of previous errors.");
+        }
+
+        List<String[]> commands = session.drain();
+        byte[][] replies = new byte[commands.size()][];
+        for (int i = 0; i < commands.size(); i++) {
+            // a failing command inside a transaction doesn't stop the others
+            replies[i] = execute(commands.get(i), session);
+        }
+        return RespWriter.array(replies);
+    }
+
+    private byte[] discard(String[] command, ClientSession session) {
+        if (command.length != 1) {
+            return RespWriter.error("ERR wrong number of arguments for 'discard' command");
+        }
+        if (!session.inTransaction()) {
+            return RespWriter.error("ERR DISCARD without MULTI");
+        }
+        session.reset();
+        return RespWriter.simpleString("OK");
     }
 
     private byte[] blpop(String[] command) {

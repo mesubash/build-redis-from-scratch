@@ -51,13 +51,16 @@ public class Main {
             // the parser owns the pending bytes now
             RespParser parser = new RespParser();
 
+            // transactions are per connection, unlike the store
+            ClientSession session = new ClientSession();
+
             while ((bytesRead = inputStream.read(buffer)) != -1) {
                 parser.append(buffer, bytesRead);
 
                 // one read may hold several commands, or none
                 String[] command;
                 while ((command = parser.next()) != null) {
-                    outputStream.write(dispatcher.execute(command));
+                    outputStream.write(dispatcher.execute(command, session));
                     outputStream.flush();
                 }
             }
